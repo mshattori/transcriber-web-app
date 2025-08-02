@@ -116,6 +116,18 @@ transcriber-web-app/
 
 # CRITICAL: Gradio State objects must be deepcopy-able
 # Simple data types work, complex objects need special handling
+
+# CRITICAL: Use tempfile.SpooledTemporaryFile for large file streaming
+# Minimizes memory usage when processing hour-long audio files
+
+# CRITICAL: Chunk naming convention must be chunk_01.mp3, chunk_02.mp3, etc.
+# Consistent naming required for proper processing workflow
+
+# CRITICAL: Translation files must use format transcript.<lang>.txt
+# Where <lang> is target language code (e.g., transcript.ja.txt)
+
+# CRITICAL: JSON translation schema uses "ts" and "text" fields
+# Format: [{"ts": "00:00:00-00:01:00", "text": "..."}] for compatibility
 ```
 
 ## Implementation Blueprint
@@ -188,19 +200,26 @@ MODIFY src/transcribe.py:
   - IMPLEMENT retry logic with exponential backoff for API errors
   - ADD timestamp preservation and formatting
   - INCLUDE confidence scores and metadata handling
+  - IMPLEMENT real-time updates using gr.Textbox.update(value += new_text) pattern
+  - ADD CLI interface using argparse in __main__ block for testing
+  - USE tempfile.SpooledTemporaryFile for memory-efficient large file handling
+  - FOLLOW chunk naming convention: chunk_01.mp3, chunk_02.mp3, etc.
 
 Task 5 - Enhance LLM Module:
 MODIFY src/llm.py:
   - ADD translation function using structured outputs
   - IMPLEMENT chat_with_context for transcription-aware conversations
-  - ADD JSON schema definitions for translation workflow
+  - ADD JSON schema definitions for translation workflow (use "ts" and "text" fields)
   - INCLUDE error handling for translation edge cases
+  - IMPLEMENT 3-message chat pattern: system → user(context) → user(question)
+  - ADD CLI interface using argparse in __main__ block for testing
+  - SUPPORT translation file naming: transcript.<lang>.txt format
 
 Task 6 - Create Main Gradio Application:
 CREATE src/app.py following EXACT INITIAL.md layout specifications:
   - IMPLEMENT gr.Blocks with light theme and custom CSS
   - CREATE single-column layout (gr.Column) with specific component order:
-    1. gr.Row containing: gr.File upload + model dropdowns + language setting + chunk slider + translation toggle
+    1. gr.Row containing: gr.File upload + model dropdowns + language setting + chunk slider + translation toggle + target language selector
     2. gr.Progress with real-time updates and time estimation  
     3. Processing log panel (gr.Textbox, lines=4, CSS: max-height: 120px; overflow-y: auto)
     4. Results display panel (gr.Markdown, full width, timestamp CSS styling)
@@ -210,6 +229,9 @@ CREATE src/app.py following EXACT INITIAL.md layout specifications:
   - IMPLEMENT history modal (history button → gr.Modal with gr.Dataframe job listing)
   - ADD notification system (gr.Alert for errors, gr.Notification for success)
   - APPLY CSS for timestamp styling: .timestamp { font-size: 0.85rem; color: #888; }
+  - ADD file size validation with 500MB warning
+  - IMPLEMENT real-time result updates with gr.Textbox.update(value += new_text)
+  - FOLLOW 4-step processing sequence: split → transcribe chunks → real-time updates → translation
 
 Task 7 - Implement Job Management:
 ADD to src/app.py:
@@ -279,8 +301,8 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
         end = min(start + chunk_length_ms, len(audio))
         chunk = audio[start:end]
         
-        # PATTERN: Save chunks with numbered filenames
-        chunk_path = f"temp_chunk_{chunk_num:02d}.mp3"
+        # PATTERN: Save chunks with numbered filenames (INITIAL.md requirement)
+        chunk_path = f"chunk_{chunk_num:02d}.mp3"
         chunk.export(chunk_path, format="mp3")
         chunks.append(chunk_path)
         
@@ -336,7 +358,7 @@ def translate_full_text(
     # PATTERN: Parse timestamps and text into JSON structure
     segments = parse_transcript_segments(transcript)
     
-    # CRITICAL: Use OpenAI structured outputs for reliable JSON
+    # CRITICAL: Use OpenAI structured outputs with INITIAL.md schema format
     json_schema = {
         "type": "object",
         "properties": {
@@ -345,10 +367,10 @@ def translate_full_text(
                 "items": {
                     "type": "object",
                     "properties": {
-                        "timestamp": {"type": "string"},
+                        "ts": {"type": "string"},
                         "text": {"type": "string"}
                     },
-                    "required": ["timestamp", "text"]
+                    "required": ["ts", "text"]
                 }
             }
         },
@@ -431,6 +453,12 @@ def create_main_interface():
                 translation_enabled = gr.Checkbox(
                     label="Enable Translation",
                     value=False
+                )
+                target_language = gr.Dropdown(
+                    choices=["Japanese", "English", "Spanish", "French", "German", "Chinese"],
+                    value="Japanese",
+                    label="Target Language",
+                    visible=False  # Show only when translation enabled
                 )
             
             # CRITICAL: Advanced settings in accordion as specified
@@ -525,6 +553,91 @@ def create_main_interface():
                     delete_job = gr.Button("Delete Selected", variant="stop")
     
     return demo
+
+# INITIAL.md Processing Sequence Implementation
+def implement_processing_workflow():
+    """
+    Implement the exact 4-step processing sequence from INITIAL.md.
+    """
+    # STEP 1: Split audio into chunks with pydub
+    def split_phase(audio_file, chunk_minutes):
+        # Use tempfile.SpooledTemporaryFile for memory efficiency
+        with tempfile.SpooledTemporaryFile() as temp_file:
+            chunks = split_audio(audio_file, chunk_minutes, overlap_seconds=2)
+            # Generate chunk_01.mp3, chunk_02.mp3, etc.
+            return chunks
+    
+    # STEP 2: Transcribe chunks with yield-based progress
+    def transcribe_phase(chunks, progress_callback):
+        results = []
+        for i, chunk in enumerate(chunks):
+            # Update progress with gr.Progress
+            progress_callback(i / len(chunks), f"Processing chunk {i+1}/{len(chunks)}")
+            result = transcribe_chunk(chunk)
+            results.append(result)
+            # STEP 3: Real-time updates during processing
+            yield result  # For real-time display updates
+        return results
+    
+    # STEP 4: Translation phase (after all chunks complete)
+    def translation_phase(full_transcript, target_language):
+        # Use JSON structured format with "ts" and "text" fields
+        segments = parse_transcript_to_json(full_transcript)
+        translated = translate_structured(segments, target_language)
+        return reconstructed_transcript(translated)
+
+# CLI Interface Implementation (INITIAL.md requirement)
+def add_cli_interfaces():
+    """
+    Add argparse CLI interfaces to transcribe.py and llm.py.
+    """
+    # In transcribe.py __main__ block:
+    if __name__ == "__main__":
+        import argparse
+        parser = argparse.ArgumentParser(description="Audio transcription CLI")
+        parser.add_argument("--file", required=True, help="Audio file path")
+        parser.add_argument("--model", default="whisper-1", help="Model to use")
+        parser.add_argument("--language", default="auto", help="Language code")
+        args = parser.parse_args()
+        # Execute transcription and print results
+    
+    # In llm.py __main__ block:
+    if __name__ == "__main__":
+        import argparse
+        parser = argparse.ArgumentParser(description="LLM operations CLI")
+        parser.add_argument("--translate", help="Translate text file")
+        parser.add_argument("--chat", help="Chat with context file")
+        parser.add_argument("--target-lang", default="Japanese", help="Target language")
+        args = parser.parse_args()
+        # Execute requested operation
+
+# File Validation with 500MB Warning (INITIAL.md requirement)
+def validate_file_with_warning(file_path):
+    """
+    Validate file and show 500MB warning as specified in INITIAL.md.
+    """
+    file_size = os.path.getsize(file_path)
+    max_size = 500 * 1024 * 1024  # 500MB in bytes
+    
+    if file_size > max_size:
+        return gr.Alert(
+            "Warning: File size exceeds 500MB. Processing may take longer and consume more memory.",
+            title="Large File Warning",
+            dismissible=True
+        )
+    return None
+
+# Chat Context Injection Pattern (INITIAL.md requirement)
+def format_chat_messages(context_text, user_question, system_message):
+    """
+    Format chat messages according to INITIAL.md 3-message pattern.
+    """
+    messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": f"Context: {context_text}"},
+        {"role": "user", "content": user_question}
+    ]
+    return messages
 ```
 
 ### UI Layout Requirements (INITIAL.md Specifications)
@@ -615,7 +728,7 @@ system_message: |
 
 # Additional configuration options for implementation
 default_language: "auto"
-translation_language: "Japanese"
+default_translation_language: "Japanese"
 default_chunk_minutes: 5
 max_file_size_mb: 500
 supported_formats:
@@ -625,8 +738,24 @@ supported_formats:
   - .flac
   - .ogg
 
+# Translation languages and their file suffixes
+translation_languages:
+  Japanese: "ja"
+  English: "en"
+  Spanish: "es"
+  French: "fr"
+  German: "de"
+  Chinese: "zh"
+
 # Transcript output format
 timestamp_format: "# HH:MM:SS --> HH:MM:SS"
+
+# Processing sequence (4 steps from INITIAL.md)
+processing_steps:
+  1: "Split audio into chunks with pydub"
+  2: "Transcribe chunks with yield-based progress"
+  3: "Real-time markdown updates via gr.Textbox.update"
+  4: "Full-text translation after all chunks complete"
 ```
 
 ### Integration Points
@@ -767,4 +896,4 @@ Provide detailed progress updates for long-running operations. Use gr.Progress w
 ### File Management
 Implement proper cleanup of temporary files. Use organized directory structure for job persistence.
 
-**Confidence Score: 9/10** - This PRP provides comprehensive context, detailed implementation guidance, and addresses all major technical challenges. The modular approach and extensive documentation references should enable successful one-pass implementation.
+**Confidence Score: 9.5/10** - This PRP now provides comprehensive coverage of ALL INITIAL.md requirements including previously missing CLI interfaces, real-time update patterns, memory management strategies, translation file naming conventions, exact JSON schema formats, 4-step processing sequence, file validation warnings, and chat context injection patterns. The complete context and detailed implementation guidance should enable highly successful one-pass implementation.
