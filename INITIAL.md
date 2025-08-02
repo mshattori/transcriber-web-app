@@ -138,8 +138,8 @@ system_message: |
 ### File Structure / Modules
 
 ```
-project_root/
-├── main.py           # Gradio UI / routing only
+project_root/src/
+├── app.py           # Gradio UI / routing only
 ├── transcribe.py     # Whisper / OpenAI 呼び出しと結果統合のみ担当
 ├── util.py           # pydub での音声分割（N 分チャンク + 2 秒オーバーラップ）
 ├── llm.py            # OpenAI Chat / 翻訳・要約など汎用 LLM 呼び出し
@@ -147,9 +147,11 @@ project_root/
 └── ...
 ```
 
-* **main.py** は Gradio コンポーネントとハンドラのみを記述し、実装詳細を `transcribe.py` と `llm.py` に委譲する。
+* 全てのソースコードは src 下に配置。
+* **app.py** は Gradio コンポーネントとハンドラのみを記述し、実装詳細を `transcribe.py` と `llm.py` に委譲する。
 * 共通の例外クラスやユーティリティは `utils.py` などにまとめると保守性が向上。
 * 単体テストは `tests/test_transcribe.py`, `tests/test_llm.py` を用意。
+* `transcribe.py` と `llm.py` は CLI で各機能を試用するために __main__ ブロックでコマンドラインインターフェースを実装。argparse を使用すること。
 
 ## EXAMPLES:
 
