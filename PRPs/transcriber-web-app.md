@@ -197,14 +197,19 @@ MODIFY src/llm.py:
   - INCLUDE error handling for translation edge cases
 
 Task 6 - Create Main Gradio Application:
-CREATE src/app.py:
-  - DESIGN UI layout with gr.Blocks following INITIAL.md specifications
-  - IMPLEMENT drag-and-drop file upload with gr.File
-  - CREATE settings modal with gr.Modal for API keys and configuration
-  - ADD progress tracking with gr.Progress for real-time updates
-  - IMPLEMENT chat interface with gr.Chatbot
-  - CREATE history management with gr.Dataframe
-  - ADD download functionality for results
+CREATE src/app.py following EXACT INITIAL.md layout specifications:
+  - IMPLEMENT gr.Blocks with light theme and custom CSS
+  - CREATE single-column layout (gr.Column) with specific component order:
+    1. gr.Row containing: gr.File upload + model dropdowns + language setting + chunk slider + translation toggle
+    2. gr.Progress with real-time updates and time estimation  
+    3. Processing log panel (gr.Textbox, lines=4, CSS: max-height: 120px; overflow-y: auto)
+    4. Results display panel (gr.Markdown, full width, timestamp CSS styling)
+    5. Download buttons section (gr.Button for .txt and .zip)
+    6. Collapsible chat panel (gr.Chatbot) at bottom
+  - IMPLEMENT settings modal (gear icon → gr.Modal with API key, models, system message)
+  - IMPLEMENT history modal (history button → gr.Modal with gr.Dataframe job listing)
+  - ADD notification system (gr.Alert for errors, gr.Notification for success)
+  - APPLY CSS for timestamp styling: .timestamp { font-size: 0.85rem; color: #888; }
 
 Task 7 - Implement Job Management:
 ADD to src/app.py:
@@ -361,16 +366,279 @@ def translate_full_text(
     )
     
     return reconstruct_transcript(response.choices[0].message.content)
+
+# Task 6: Main Gradio Application UI Layout
+def create_main_interface():
+    """
+    Create the main Gradio interface following INITIAL.md specifications.
+    """
+    # CRITICAL: Custom CSS for timestamp styling and layout
+    custom_css = """
+    .timestamp { 
+        font-size: 0.85rem; 
+        color: #888; 
+    }
+    .processing-log {
+        max-height: 120px;
+        overflow-y: auto;
+    }
+    .toast-notification {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 1000;
+    }
+    """
+    
+    with gr.Blocks(css=custom_css, theme="default") as demo:
+        # PATTERN: Load config.yaml for dropdown options
+        config = load_config("src/config.yaml")
+        
+        # PATTERN: Browser state for settings persistence
+        browser_state = gr.BrowserState({
+            "api_key": "",
+            "audio_model": config["audio_models"][0],
+            "language_model": config["language_models"][0],
+            "system_message": config["system_message"]
+        })
+        
+        # LAYOUT: Single column as specified in INITIAL.md
+        with gr.Column():
+            # 1. UPLOAD & CONTROLS SECTION (gr.Row for space efficiency)
+            with gr.Row():
+                file_upload = gr.File(
+                    label="Upload Audio File",
+                    file_types=[".mp3", ".wav", ".m4a", ".flac", ".ogg"],
+                    file_count="single"
+                )
+                audio_model = gr.Dropdown(
+                    choices=config["audio_models"],
+                    value=config["audio_models"][0],
+                    label="Audio Model"
+                )
+                language = gr.Dropdown(
+                    choices=["auto", "en", "ja", "es", "fr", "de", "zh"],
+                    value="auto",
+                    label="Language"
+                )
+                chunk_minutes = gr.Slider(
+                    minimum=1,
+                    maximum=10,
+                    value=5,
+                    step=1,
+                    label="Chunk Duration (minutes)"
+                )
+                translation_enabled = gr.Checkbox(
+                    label="Enable Translation",
+                    value=False
+                )
+            
+            # CRITICAL: Advanced settings in accordion as specified
+            with gr.Accordion("Advanced Settings", open=False):
+                temperature = gr.Slider(0.0, 1.0, 0.0, label="Temperature")
+                timestamp_output = gr.Checkbox(True, label="Include Timestamps")
+            
+            # 2. PROGRESS SECTION
+            progress = gr.Progress()
+            
+            # 3. PROCESSING LOG PANEL (minimal height as specified)
+            processing_log = gr.Textbox(
+                label="Processing Log",
+                lines=4,
+                max_lines=4,
+                interactive=False,
+                elem_classes=["processing-log"]
+            )
+            
+            # 4. RESULTS DISPLAY PANEL (full width for readability)
+            with gr.Tab("Results") as results_tab:
+                transcript_display = gr.Markdown(
+                    label="Transcript",
+                    value="Upload an audio file to begin transcription..."
+                )
+                copy_button = gr.Button("Copy to Clipboard", size="sm")
+            
+            # CRITICAL: Tab view for original/translated when translation enabled
+            with gr.Tab("Translation", visible=False) as translation_tab:
+                translated_display = gr.Markdown(label="Translated Text")
+            
+            # 5. DOWNLOAD SECTION
+            with gr.Row():
+                download_txt = gr.File(label="Download Transcript (.txt)", visible=False)
+                download_zip = gr.File(label="Download Package (.zip)", visible=False)
+                stats_display = gr.Textbox(
+                    label="Statistics",
+                    value="Duration: -- | Words: -- | WPM: --",
+                    interactive=False
+                )
+            
+            # 6. CHAT PANEL (collapsible, bottom placement)
+            with gr.Accordion("Chat with Transcript", open=False):
+                chatbot = gr.Chatbot(label="AI Assistant")
+                chat_input = gr.Textbox(label="Your Question", placeholder="Ask about the transcript...")
+                with gr.Row():
+                    chat_submit = gr.Button("Send", variant="primary")
+                    chat_clear = gr.Button("Clear History")
+        
+        # MODAL: Settings panel (gear icon trigger)
+        with gr.Row():
+            settings_button = gr.Button("⚙️ Settings", size="sm")
+            history_button = gr.Button("📁 History", size="sm")
+        
+        # CRITICAL: Settings modal as specified in INITIAL.md
+        with gr.Modal(visible=False) as settings_modal:
+            with gr.Column():
+                gr.Markdown("## Settings")
+                api_key_input = gr.Textbox(
+                    label="OpenAI API Key",
+                    type="password",
+                    placeholder="sk-..."
+                )
+                settings_audio_model = gr.Dropdown(
+                    choices=config["audio_models"],
+                    label="Default Audio Model"
+                )
+                settings_language_model = gr.Dropdown(
+                    choices=config["language_models"],
+                    label="Default Language Model"
+                )
+                system_message_edit = gr.Textbox(
+                    label="System Message",
+                    value=config["system_message"],
+                    lines=3
+                )
+                with gr.Row():
+                    save_settings = gr.Button("Save", variant="primary")
+                    reset_settings = gr.Button("Reset to Defaults")
+        
+        # MODAL: History management
+        with gr.Modal(visible=False) as history_modal:
+            with gr.Column():
+                gr.Markdown("## Job History")
+                history_dataframe = gr.Dataframe(
+                    headers=["Filename", "Date", "Duration", "Language", "Status"],
+                    datatype=["str", "str", "str", "str", "str"],
+                    interactive=False
+                )
+                with gr.Row():
+                    reload_history = gr.Button("Reload")
+                    delete_job = gr.Button("Delete Selected", variant="stop")
+    
+    return demo
+```
+
+### UI Layout Requirements (INITIAL.md Specifications)
+
+```yaml
+MAIN LAYOUT STRUCTURE (gr.Blocks with custom CSS):
+  Theme: Light style theme
+  Layout: Single column (gr.Column) top-to-bottom arrangement
+
+  1. UPLOAD & CONTROLS SECTION (gr.Row for space efficiency):
+     - gr.File: Drag & drop upload box with file validation
+     - Model selection dropdown (audio_models from config.yaml)
+     - Language setting (IETF BCP-47, default "auto")
+     - N-minute chunk duration dropdown (1-10 minutes)
+     - Translation toggle switch
+     - Advanced settings accordion for temperature, timestamps, etc.
+
+  2. PROGRESS SECTION:
+     - gr.Progress: Real-time upload & processing progress
+     - Estimated time remaining display
+
+  3. PROCESSING LOG PANEL:
+     - gr.Textbox or gr.Markdown with minimal height (lines=4)
+     - CSS: max-height: 120px; overflow-y: auto;
+     - Optional gr.Accordion for collapsible behavior
+     - Auto-scroll to latest updates
+
+  4. RESULTS DISPLAY PANEL:
+     - gr.HTML/gr.Markdown: Full width display for readability
+     - Timestamp formatting: <span class="timestamp">...</span>
+     - CSS: .timestamp { font-size: 0.85rem; color: #888; }
+     - Copy to clipboard button
+     - Tab/split view for original/translated content when translation enabled
+     - Statistics display: duration, word count, WPM
+
+  5. DOWNLOAD SECTION:
+     - gr.Button for transcript.txt (no translation) or transcript.zip (with translation)
+
+  6. CHAT PANEL (Bottom of page):
+     - gr.Chatbot: Collapsible with toggle button
+     - Context injection from current transcript
+     - Clear history button
+     - Space-saving design
+
+MODAL INTERFACES:
+
+  SETTINGS MODAL (gr.Modal triggered by gear icon):
+    - Position: Top-right gear icon button
+    - Layout: gr.Column structure
+    - Components:
+      * OpenAI API Key input (required, stored in localStorage)
+      * Audio model dropdown (from audio_models in config.yaml)
+      * Language model dropdown (from language_models in config.yaml)
+      * System message gr.Textbox (editable, localStorage persistence)
+      * Save button (write to localStorage)
+      * Reset to defaults button (restore config.yaml values)
+
+  HISTORY MODAL (gr.Modal triggered by history button):
+    - gr.Dataframe or gr.Dataset for job listings
+    - Columns: filename, date, duration, language, status
+    - Actions: view, download, delete
+    - Job persistence: data/{YYYY-MM-DD}/{job_id}/ structure
+
+NOTIFICATION SYSTEM:
+  - gr.Alert: Fatal errors only (persistent until dismissed)
+  - gr.Notification: Success/info messages (toast style, auto-fade)
+  - CSS: Custom toast positioning (bottom-right)
+  - Minimize fixed UI elements to maximize results panel space
+```
+
+### Config.yaml Format (INITIAL.md Specification)
+
+```yaml
+# src/config.yaml - Exact format required
+audio_models:
+  - whisper-1
+  - gpt-4o-mini-transcribe
+  - gpt-4o-transcribe
+
+language_models:
+  - gpt-4o-mini
+  - gpt-4o
+  - gpt-4o-speed
+
+system_message: |
+  あなたはプロフェッショナルで親切な文字起こしアシスタントです。
+  ユーザの要求に簡潔かつ正確に答えてください。
+
+# Additional configuration options for implementation
+default_language: "auto"
+translation_language: "Japanese"
+default_chunk_minutes: 5
+max_file_size_mb: 500
+supported_formats:
+  - .mp3
+  - .wav
+  - .m4a
+  - .flac
+  - .ogg
+
+# Transcript output format
+timestamp_format: "# HH:MM:SS --> HH:MM:SS"
 ```
 
 ### Integration Points
 ```yaml
 GRADIO COMPONENTS:
   - gr.File: Drag-and-drop upload with file validation
-  - gr.Progress: Real-time transcription progress
+  - gr.Progress: Real-time transcription progress  
   - gr.BrowserState: API key and settings persistence
   - gr.Modal: Settings and history management
   - gr.Chatbot: Interactive chat with transcript context
+  - gr.Accordion: Collapsible sections for space optimization
+  - gr.Row/gr.Column: Layout structure as specified in INITIAL.md
 
 OPENAI API:
   - /v1/audio/transcriptions: Whisper transcription
