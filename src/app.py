@@ -140,23 +140,19 @@ def load_default_settings() -> Dict[str, Any]:
             "translation_enabled": False
         }
 
-def save_settings_to_browser_state(settings: Dict[str, Any], browser_state: BrowserState):
+def save_settings_to_browser_state(settings: Dict[str, Any], browser_state_value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Save settings to browser localStorage."""
-    try:
-        browser_state["settings"] = settings
-        return browser_state
-    except Exception as e:
-        print(f"Error saving settings: {e}")
-        return browser_state
+    if not isinstance(browser_state_value, dict):
+        browser_state_value = {}
+    browser_state_value["settings"] = settings
+    return browser_state_value
 
-def load_settings_from_browser_state(browser_state: BrowserState) -> Dict[str, Any]:
+def load_settings_from_browser_state(browser_state_value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """Load settings from browser localStorage with fallback to defaults."""
-    try:
-        if "settings" in browser_state:
-            return browser_state["settings"]
-    except Exception:
-        pass
+    if isinstance(browser_state_value, dict) and "settings" in browser_state_value:
+        return browser_state_value["settings"]
     
+    print("No settings found in browser state, using defaults.")
     return load_default_settings()
 
 def validate_settings(settings: Dict[str, Any]) -> Tuple[bool, str]:
@@ -196,15 +192,19 @@ def progress_callback(progress: float, message: str):
 
 async def process_audio_file(
     audio_file: str,
-    settings: Dict[str, Any],
+    browser_state_value: Dict[str, Any],
+    ui_settings: Dict[str, Any],
     progress: gr.Progress = None
-) -> Tuple[str, str, str]:
+) -> Tuple[str, str, str, Dict[str, Any]]:
     """
     Process audio file with transcription and optional translation.
     
     Returns:
-        Tuple of (transcript_text, translation_text, job_id)
+        Tuple of (transcript_text, translation_text, job_id, settings_used)
     """
+    # Load persistent settings and merge UI settings
+    settings = load_settings_from_browser_state(browser_state_value)
+    settings.update(ui_settings)
     from errors import (
         TranscriberError, ValidationError, APIError, FileError, 
         get_user_friendly_message, safe_execute
@@ -337,7 +337,7 @@ async def process_audio_file(
         if progress:
             progress(1.0, "Processing completed!")
         
-        return transcript_text, translation_text, job_id
+        return transcript_text, translation_text, job_id, settings
         
     except ValidationError as e:
         raise gr.Error(get_user_friendly_message(e))
@@ -715,24 +715,34 @@ def create_app():
         )
         
         # Main processing function
-        async def process_audio_wrapper(audio_file, browser_state_value, progress=progress_display):
-            settings = load_settings_from_browser_state(browser_state_value)
-            settings.update({
-                "audio_model": audio_model.value,
-                "default_language": language_select.value,
-                "chunk_minutes": chunk_minutes.value,
-                "translation_enabled": translation_enabled.value,
-                "default_translation_language": translation_target.value if translation_enabled.value else ""
-            })
+        async def process_audio_wrapper(
+            audio_file, 
+            browser_state_value, 
+            audio_model_val,
+            language_select_val,
+            chunk_minutes_val,
+            translation_enabled_val,
+            translation_target_val,
+            progress=progress_display
+        ):
+            ui_settings = {
+                "audio_model": audio_model_val,
+                "default_language": language_select_val,
+                "chunk_minutes": chunk_minutes_val,
+                "translation_enabled": translation_enabled_val,
+                "default_translation_language": translation_target_val if translation_enabled_val else ""
+            }
             
-            transcript, translation, job_id = await process_audio_file(audio_file, settings, progress)
+            transcript, translation, job_id, settings_used = await process_audio_file(
+                audio_file, browser_state_value, ui_settings, progress
+            )
             
             # Format for display
             transcript_html = format_transcript_for_display(transcript)
             translation_html = format_transcript_for_display(translation) if translation else ""
             
             # Create download files
-            download_path = create_download_files(job_id, settings)
+            download_path = create_download_files(job_id, settings_used)
             
             return (
                 transcript_html,
@@ -744,7 +754,15 @@ def create_app():
         
         process_btn.click(
             process_audio_wrapper,
-            inputs=[audio_input, browser_state],
+            inputs=[
+                audio_input, 
+                browser_state,
+                audio_model,
+                language_select,
+                chunk_minutes,
+                translation_enabled,
+                translation_target
+            ],
             outputs=[
                 transcript_display,
                 translation_display,
