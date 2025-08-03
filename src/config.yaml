@@ -1,0 +1,45 @@
+# src/config.yaml - Exact format required
+audio_models:
+  - whisper-1
+  - gpt-4o-mini-transcribe
+  - gpt-4o-transcribe
+
+language_models:
+  - gpt-4o-mini
+  - gpt-4o
+  - gpt-4o-speed
+
+system_message: |
+  あなたはプロフェッショナルで親切な文字起こしアシスタントです。
+  ユーザの要求に簡潔かつ正確に答えてください。
+
+# Additional configuration options for implementation
+default_language: "auto"
+default_translation_language: "Japanese"
+default_chunk_minutes: 5
+max_file_size_mb: 500
+supported_formats:
+  - .mp3
+  - .wav
+  - .m4a
+  - .flac
+  - .ogg
+
+# Translation languages and their file suffixes
+translation_languages:
+  Japanese: "ja"
+  English: "en"
+  Spanish: "es"
+  French: "fr"
+  German: "de"
+  Chinese: "zh"
+
+# Transcript output format
+timestamp_format: "# HH:MM:SS --> HH:MM:SS"
+
+# Processing sequence (4 steps from INITIAL.md)
+processing_steps:
+  1: "Split audio into chunks with pydub"
+  2: "Transcribe chunks with yield-based progress"
+  3: "Real-time markdown updates via gr.Textbox.update"
+  4: "Full-text translation after all chunks complete"
