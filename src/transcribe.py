@@ -120,7 +120,7 @@ async def transcribe_single_chunk(
                         
                         resp = openai.audio.transcriptions.create(
                             model=model,
-                            file=temp_file,
+                            file=(Path(chunk_path).name, temp_file),
                             language=None if language == "auto" else language,
                             temperature=temperature,
                             response_format=response_format
@@ -215,7 +215,7 @@ async def transcribe_chunked(
     if progress_callback:
         progress_callback(0.1, "Splitting audio into chunks...")
     
-    chunks = split_audio(audio_path, chunk_minutes, overlap_seconds=2)
+    chunks, temp_dir = split_audio(audio_path, chunk_minutes, overlap_seconds=2)
     total_chunks = len(chunks)
     
     # Step 2: Transcribe chunks with progress
@@ -223,6 +223,7 @@ async def transcribe_chunked(
     chunk_objects = []
     
     for i, chunk_path in enumerate(chunks):
+        print(f"[DEBUG] Processing chunk: {chunk_path}")
         if progress_callback:
             progress_percent = 0.1 + (i / total_chunks) * 0.8  # 10% to 90%
             progress_callback(progress_percent, f"Processing chunk {i+1}/{total_chunks}")
@@ -247,7 +248,7 @@ async def transcribe_chunked(
         except Exception as e:
             # Clean up partial chunks on error
             from util import cleanup_chunks
-            cleanup_chunks(chunks)
+            cleanup_chunks(chunks, temp_dir)
             
             from errors import TranscriberError, APIError
             
@@ -267,7 +268,8 @@ async def transcribe_chunked(
     processing_time = time.time() - start_time
     
     # Cleanup temporary files
-    cleanup_chunks(chunks)
+    from util import cleanup_chunks
+    cleanup_chunks(chunks, temp_dir)
     
     if progress_callback:
         progress_callback(1.0, "Transcription completed!")

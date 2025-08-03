@@ -69,12 +69,13 @@ def load_config(config_path: str = None) -> dict:
         )
 
 
-def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) -> List[str]:
+def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) -> Tuple[List[str], str]:
     """
     Split audio file into overlapping chunks to handle API limits.
     
     Uses memory-efficient processing with tempfile.SpooledTemporaryFile
     for large file handling as specified in INITIAL.md.
+    Creates a temporary directory for the chunks.
     
     Args:
         file_path: Path to input audio file
@@ -82,7 +83,9 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
         overlap_seconds: Overlap between chunks in seconds (default: 2)
     
     Returns:
-        List of chunk file paths following naming convention: chunk_01.mp3, chunk_02.mp3, etc.
+        A tuple containing:
+        - List of chunk file paths following naming convention: chunk_01.mp3, etc.
+        - The path to the temporary directory created.
     """
     from errors import ValidationError, FileError, MemoryError, safe_execute
     
@@ -106,6 +109,10 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
         raise FileError(f"Audio file not found: {file_path}", file_path=file_path, operation="splitting")
     
     def _split_audio_process():
+        # Create a dedicated temporary directory for chunks
+        temp_dir = tempfile.mkdtemp()
+        print(f"[DEBUG] Created temporary directory for chunks: {temp_dir}")
+
         # Use tempfile.SpooledTemporaryFile for memory efficiency (INITIAL.md requirement)
         with tempfile.SpooledTemporaryFile():
             try:
@@ -150,7 +157,9 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
                 chunk = audio[start:end]
                 
                 # Follow INITIAL.md naming convention: chunk_01.mp3, chunk_02.mp3, etc.
-                chunk_path = f"chunk_{chunk_num:02d}.mp3"
+                chunk_name = f"chunk_{chunk_num:02d}.mp3"
+                chunk_path = os.path.join(temp_dir, chunk_name)
+                print(f"[DEBUG] Creating chunk: {chunk_path}")
                 
                 # Export chunk to MP3 format
                 chunk.export(chunk_path, format="mp3")
@@ -175,7 +184,7 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
                     operation="exporting"
                 )
         
-        return chunks
+        return chunks, temp_dir
     
     return safe_execute(_split_audio_process, error_context=f"splitting audio file {file_path}")
 
@@ -236,12 +245,13 @@ def estimate_processing_time(file_size_mb: float, chunk_duration_minutes: int) -
     }
 
 
-def cleanup_chunks(chunk_files: List[str]) -> None:
+def cleanup_chunks(chunk_files: List[str], temp_dir: Optional[str] = None) -> None:
     """
-    Clean up temporary chunk files.
+    Clean up temporary chunk files and the directory containing them.
     
     Args:
-        chunk_files: List of chunk file paths to remove
+        chunk_files: List of chunk file paths to remove.
+        temp_dir: The temporary directory to remove.
     """
     for chunk_file in chunk_files:
         try:
@@ -249,6 +259,14 @@ def cleanup_chunks(chunk_files: List[str]) -> None:
                 os.remove(chunk_file)
         except Exception as e:
             print(f"Warning: Failed to remove chunk file {chunk_file}: {e}")
+
+    if temp_dir and os.path.exists(temp_dir):
+        try:
+            import shutil
+            shutil.rmtree(temp_dir)
+            print(f"[DEBUG] Removed temporary directory: {temp_dir}")
+        except Exception as e:
+            print(f"Warning: Failed to remove temporary directory {temp_dir}: {e}")
 
 
 def get_audio_stats(file_path: str) -> dict:
@@ -307,6 +325,7 @@ def format_duration(seconds: float) -> str:
 def create_job_directory(job_id: str) -> str:
     """
     Create job directory following the data/{YYYY-MM-DD}/{job_id}/ structure.
+    Ensures the path is relative to the project root.
     
     Args:
         job_id: Unique job identifier
@@ -316,8 +335,11 @@ def create_job_directory(job_id: str) -> str:
     """
     from datetime import datetime
     
+    # Get the absolute path of the project root directory (one level up from src)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    
     date_str = datetime.now().strftime("%Y-%m-%d")
-    job_dir = os.path.join("data", date_str, job_id)
+    job_dir = os.path.join(project_root, "data", date_str, job_id)
     
     os.makedirs(job_dir, exist_ok=True)
     return job_dir

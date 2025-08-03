@@ -211,6 +211,7 @@ async def process_audio_file(
     )
     
     try:
+        print(f"[DEBUG] Received audio file: {audio_file}")
         # Validate inputs
         if not audio_file:
             raise ValidationError("No audio file provided", field="audio_file")
@@ -379,13 +380,23 @@ def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
     """Create download files (single .txt or .zip with multiple files)."""
     if not job_id:
         raise gr.Error("No transcript available for download")
+
+    # Get the absolute path of the project root directory (one level up from src)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     
     # Find job directory
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    job_dir = os.path.join("data", date_str, job_id)
-    
-    if not os.path.exists(job_dir):
-        raise gr.Error("Transcript files not found")
+    # This requires searching through date-based folders
+    data_root = os.path.join(project_root, "data")
+    job_dir = None
+    if os.path.exists(data_root):
+        for date_folder in os.listdir(data_root):
+            potential_path = os.path.join(data_root, date_folder, job_id)
+            if os.path.exists(potential_path):
+                job_dir = potential_path
+                break
+
+    if not job_dir:
+        raise gr.Error("Transcript files not found for the given job ID")
     
     transcript_path = os.path.join(job_dir, "transcript.txt")
     
@@ -398,10 +409,11 @@ def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
                 zipf.write(transcript_path, "transcript.txt")
             
             # Find translation file
-            lang_code = settings["default_translation_language"].lower()[:2]
-            translation_path = os.path.join(job_dir, f"transcript.{lang_code}.txt")
-            if os.path.exists(translation_path):
-                zipf.write(translation_path, f"transcript.{lang_code}.txt")
+            lang_code = settings.get("default_translation_language", "").lower()[:2]
+            if lang_code:
+                translation_path = os.path.join(job_dir, f"transcript.{lang_code}.txt")
+                if os.path.exists(translation_path):
+                    zipf.write(translation_path, f"transcript.{lang_code}.txt")
         
         return zip_path
     else:
@@ -411,7 +423,8 @@ def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
 def get_job_history() -> List[List[str]]:
     """Get list of previous jobs for history view."""
     jobs = []
-    data_dir = "data"
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    data_dir = os.path.join(project_root, "data")
     
     if not os.path.exists(data_dir):
         return []
@@ -451,11 +464,13 @@ def load_job_transcript(job_id: str) -> Tuple[str, str]:
     if not job_id:
         return "", ""
     
-    # Find job by ID across all date folders
-    data_dir = "data"
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    data_dir = os.path.join(project_root, "data")
+
     if not os.path.exists(data_dir):
         return "", ""
     
+    # Find job by ID across all date folders
     for date_folder in os.listdir(data_dir):
         date_path = os.path.join(data_dir, date_folder)
         if not os.path.isdir(date_path):
