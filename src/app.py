@@ -706,12 +706,12 @@ def create_app():
         
         # Show/hide translation controls
         def toggle_translation_visibility(enabled):
-            return gr.update(visible=enabled), gr.update(visible=enabled)
+            return gr.update(visible=enabled)
         
         translation_enabled.change(
             toggle_translation_visibility,
             inputs=[translation_enabled],
-            outputs=[translation_target, translation_column]
+            outputs=[translation_target]
         )
         
         # Main processing function
@@ -846,6 +846,23 @@ def create_app():
         copy_translation_btn.click(
             lambda: gr.Info("Translation copied to clipboard!"),
             js="() => navigator.clipboard.writeText(document.querySelector('.results-panel').innerText)"
+        )
+        
+        # Page load initialization - load settings from browser state
+        def initialize_components(browser_state_value):
+            settings = load_settings_from_browser_state(browser_state_value)
+            return (
+                settings.get("audio_model", config["audio_models"][0] if config["audio_models"] else "whisper-1"),
+                settings.get("default_language", "auto"),
+                settings.get("chunk_minutes", 5),
+                settings.get("translation_enabled", False),
+                settings.get("default_translation_language", "Japanese")
+            )
+        
+        app.load(
+            initialize_components,
+            inputs=[browser_state],
+            outputs=[audio_model, language_select, chunk_minutes, translation_enabled, translation_target]
         )
     
     return app
