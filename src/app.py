@@ -2,6 +2,7 @@
 Main Gradio application for transcriber web app.
 
 Implements the exact UI layout and functionality specified in INITIAL.md.
+Supports environment-based configuration for production, testing, and mock UI modes.
 """
 
 import os
@@ -14,6 +15,16 @@ from typing import Optional, Dict, Any, List, Tuple
 import gradio as gr
 from gradio import BrowserState
 
+# Handler imports for separation of UI and business logic
+from handlers import (
+    AudioHandler, MockAudioHandler,
+    ChatHandler, MockChatHandler,
+    HistoryHandler, MockHistoryHandler,
+    SettingsHandler, MockSettingsHandler
+)
+from config import AppConfig
+
+# Legacy imports for backward compatibility (will be removed gradually)
 from transcribe import transcribe_chunked
 from llm import (
     translate_transcript_full, 
@@ -378,6 +389,9 @@ def format_transcript_for_display(text: str) -> str:
 
 def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
     """Create download files (single .txt or .zip with multiple files)."""
+    import tempfile
+    import shutil
+    
     if not job_id:
         raise gr.Error("No transcript available for download")
 
@@ -401,10 +415,10 @@ def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
     transcript_path = os.path.join(job_dir, "transcript.txt")
     
     if settings.get("translation_enabled", False):
-        # Create ZIP with both files
-        zip_path = os.path.join(job_dir, "transcript.zip")
+        # Create ZIP with both files in temp directory
+        temp_zip_path = tempfile.mktemp(suffix=".zip")
         
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             if os.path.exists(transcript_path):
                 zipf.write(transcript_path, "transcript.txt")
             
@@ -415,10 +429,15 @@ def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
                 if os.path.exists(translation_path):
                     zipf.write(translation_path, f"transcript.{lang_code}.txt")
         
-        return zip_path
+        return temp_zip_path
     else:
-        # Return single transcript file
-        return transcript_path if os.path.exists(transcript_path) else ""
+        # Copy single transcript file to temp directory
+        if os.path.exists(transcript_path):
+            temp_transcript_path = tempfile.mktemp(suffix=".txt")
+            shutil.copy2(transcript_path, temp_transcript_path)
+            return temp_transcript_path
+        else:
+            return ""
 
 def get_job_history() -> List[List[str]]:
     """Get list of previous jobs for history view."""
@@ -546,8 +565,33 @@ def clear_chat_history() -> List[List[str]]:
     return []
 
 # Create the Gradio interface
-def create_app():
-    config = load_config()
+def create_app(env: str = "prod"):
+    """
+    Create Gradio app with environment-specific handlers.
+    
+    Args:
+        env: Environment name (prod, test, mock-ui)
+        
+    Returns:
+        Gradio app instance
+    """
+    # Initialize configuration
+    app_config = AppConfig(env)
+    config = app_config.get_all()
+    
+    # Initialize handlers based on environment
+    if env == "mock-ui":
+        # Use mock handlers for UI testing
+        audio_handler = MockAudioHandler()
+        chat_handler = MockChatHandler()
+        history_handler = MockHistoryHandler()
+        settings_handler = MockSettingsHandler()
+    else:
+        # Use real handlers for production and testing
+        audio_handler = AudioHandler()
+        chat_handler = ChatHandler()
+        history_handler = HistoryHandler()
+        settings_handler = SettingsHandler()
     
     with gr.Blocks(css=CUSTOM_CSS, title="Audio Transcription App") as app:
         # Browser state for settings persistence
@@ -740,6 +784,9 @@ def create_app():
             translation_target_val,
             progress=progress_display
         ):
+            # Load settings from browser state using handler
+            base_settings = settings_handler.load_settings_from_browser_state(browser_state_value)
+            
             ui_settings = {
                 "audio_model": audio_model_val,
                 "default_language": language_select_val,
@@ -748,22 +795,40 @@ def create_app():
                 "default_translation_language": translation_target_val if translation_enabled_val else ""
             }
             
-            transcript, translation, job_id, settings_used = await process_audio_file(
-                audio_file, browser_state_value, ui_settings, progress
-            )
+            # Merge settings using handler
+            settings = settings_handler.merge_settings(base_settings, ui_settings)
+            
+            # Use audio handler for processing
+            try:
+                result = await audio_handler.process_audio(
+                    audio_file, 
+                    settings,
+                    lambda p, m: progress(p, m) if progress else None
+                )
+                
+                transcript = result.transcript
+                translation = result.translation
+                job_id = result.job_id
+                settings_used = result.settings_used
+            except Exception as e:
+                from errors import get_user_friendly_message
+                error_msg = get_user_friendly_message(e) if hasattr(e, '__class__') else str(e)
+                raise gr.Error(error_msg)
             
             # Format for display
             transcript_html = format_transcript_for_display(transcript)
             translation_html = format_transcript_for_display(translation) if translation else ""
             
-            # Create download files
-            download_path = create_download_files(job_id, settings_used)
+            # Create download files (skip in mock mode since files don't exist)
+            download_path = None
+            if env != "mock-ui":
+                download_path = create_download_files(job_id, settings_used)
             
             return (
                 transcript_html,
                 translation_html,
-                gr.update(visible=True, value=download_path),
-                gr.update(visible=bool(translation) and bool(download_path), value=download_path),
+                gr.update(visible=bool(download_path), value=download_path) if download_path else gr.update(visible=False),
+                gr.update(visible=bool(translation) and bool(download_path), value=download_path) if download_path else gr.update(visible=False),
                 f"Processing completed! Job ID: {job_id}"
             )
         
@@ -827,9 +892,9 @@ def create_app():
         
         # Close settings button removed - using accordion instead
         
-        # History functions
+        # History functions with handler
         def refresh_history():
-            return get_job_history()
+            return history_handler.get_job_history()
         
         def load_selected_job(table_data, selected_index):
             if not table_data or selected_index is None:
@@ -837,7 +902,7 @@ def create_app():
                 return "", "", gr.update(visible=False)
             
             job_id = table_data[selected_index][0]
-            transcript, translation = load_job_transcript(job_id)
+            transcript, translation = history_handler.load_job_transcript(job_id)
             
             transcript_html = format_transcript_for_display(transcript)
             translation_html = format_transcript_for_display(translation) if translation else ""
@@ -852,21 +917,30 @@ def create_app():
             outputs=[history_table]
         )
         
-        # Chat functions
+        # Chat functions with handler
+        def handle_chat_wrapper(message, history, browser_state_value):
+            settings = settings_handler.load_settings_from_browser_state(browser_state_value)
+            
+            # Set context for chat handler
+            context_text = app_state.current_transcript or ""
+            chat_handler.set_context(context_text)
+            
+            return chat_handler.handle_message(message, history, settings)
+        
         chat_send_btn.click(
-            lambda msg, hist, browser_state_value: handle_chat_message(msg, hist, load_settings_from_browser_state(browser_state_value)),
+            handle_chat_wrapper,
             inputs=[chat_input, chat_interface, browser_state],
             outputs=[chat_interface, chat_input]
         )
         
         chat_input.submit(
-            lambda msg, hist, browser_state_value: handle_chat_message(msg, hist, load_settings_from_browser_state(browser_state_value)),
+            handle_chat_wrapper,
             inputs=[chat_input, chat_interface, browser_state],
             outputs=[chat_interface, chat_input]
         )
         
         chat_clear_btn.click(
-            clear_chat_history,
+            lambda: chat_handler.clear_history(),
             outputs=[chat_interface]
         )
         
@@ -901,8 +975,15 @@ def create_app():
     return app
 
 if __name__ == "__main__":
-    app = create_app()
-    app.launch(
+    # Get environment from environment variable or default to prod
+    env = os.getenv("APP_ENV", "prod")
+    
+    print(f"Starting transcriber web app in {env} mode...")
+    if env == "mock-ui":
+        print("Using mock handlers for UI testing")
+    
+    demo = create_app(env=env)
+    demo.launch(
         server_name="0.0.0.0",
         server_port=7860,
         share=False,

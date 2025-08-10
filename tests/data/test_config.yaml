@@ -1,0 +1,52 @@
+# Test configuration for transcriber web app
+# This configuration is used for testing business logic
+
+# Audio Models for Testing
+audio_models:
+  - "whisper-1"
+  - "whisper-large"
+
+# Language Models for Testing  
+language_models:
+  - "gpt-4o-mini"
+  - "gpt-4o"
+  - "gpt-3.5-turbo"
+
+# Translation Languages
+translation_languages:
+  "Japanese": "ja"
+  "English": "en"
+  "Spanish": "es" 
+  "French": "fr"
+  "German": "de"
+
+# Default System Message
+system_message: "あなたはテスト用の文字起こしアシスタントです。"
+
+# Default Settings
+default_language: "auto"
+default_translation_language: "Japanese"
+default_chunk_minutes: 5
+
+# Test-specific Settings
+test_settings:
+  # Small test file - fast processing
+  small_file_max_size_mb: 1
+  small_file_max_duration_sec: 30
+  
+  # Medium test file - moderate processing
+  medium_file_max_size_mb: 10
+  medium_file_max_duration_sec: 300
+  
+  # Large test file - longer processing
+  large_file_max_size_mb: 50
+  large_file_max_duration_sec: 600
+  
+  # Timeout settings for tests
+  api_timeout_seconds: 30
+  processing_timeout_seconds: 120
+  
+  # Mock delays (for realistic testing)
+  mock_transcription_delay: 0.1
+  mock_translation_delay: 0.1
+  mock_chat_delay: 0.1
