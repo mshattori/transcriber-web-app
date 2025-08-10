@@ -136,7 +136,7 @@ def load_default_settings() -> Dict[str, Any]:
             "system_message": config.get("system_message", ""),
             "default_language": config.get("default_language", "auto"),
             "default_translation_language": config.get("default_translation_language", "Japanese"),
-            "chunk_minutes": config.get("default_chunk_minutes", 5),
+            "chunk_minutes": config.get("default_chunk_minutes", 1),
             "translation_enabled": False
         }
     except Exception:
@@ -147,7 +147,7 @@ def load_default_settings() -> Dict[str, Any]:
             "system_message": "あなたはプロフェッショナルで親切な文字起こしアシスタントです。",
             "default_language": "auto",
             "default_translation_language": "Japanese",
-            "chunk_minutes": 5,
+            "chunk_minutes": 1,
             "translation_enabled": False
         }
 
@@ -631,7 +631,7 @@ def create_app(env: str = "prod"):
                     chunk_minutes = gr.Slider(
                         minimum=1,
                         maximum=10,
-                        value=5,
+                        value=1,
                         step=1,
                         label="Chunk Duration (minutes)",
                         interactive=True
@@ -962,7 +962,7 @@ def create_app(env: str = "prod"):
             return (
                 settings.get("audio_model", config["audio_models"][0] if config["audio_models"] else "whisper-1"),
                 settings.get("default_language", "auto"),
-                settings.get("chunk_minutes", 5),
+                settings.get("chunk_minutes", 1),
                 settings.get("translation_enabled", False),
                 settings.get("default_translation_language", "Japanese")
             )

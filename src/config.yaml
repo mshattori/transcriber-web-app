@@ -16,7 +16,7 @@ system_message: |
 # Additional configuration options for implementation
 default_language: "auto"
 default_translation_language: "Japanese"
-default_chunk_minutes: 5
+default_chunk_minutes: 1
 max_file_size_mb: 500
 supported_formats:
   - .mp3
