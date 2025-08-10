@@ -270,7 +270,8 @@ async def process_audio_file(
                 chunk_minutes=settings["chunk_minutes"],
                 temperature=0.0,
                 include_timestamps=True,
-                progress_callback=lambda p, m: progress(0.1 + p * 0.6, m) if progress else None
+                progress_callback=lambda p, m: progress(0.1 + p * 0.6, m) if progress else None,
+                job_dir=job_dir
             )
             
             transcript_text = transcript_result.text

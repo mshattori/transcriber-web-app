@@ -7,6 +7,7 @@ real-time progress updates and retry logic with exponential backoff.
 
 import asyncio
 import argparse
+import os
 import tempfile
 import time
 from typing import List, Dict, Optional, Callable
@@ -185,7 +186,8 @@ async def transcribe_chunked(
     chunk_minutes: int = 5,
     temperature: float = 0.0,
     include_timestamps: bool = True,
-    progress_callback: Optional[Callable] = None
+    progress_callback: Optional[Callable] = None,
+    job_dir: Optional[str] = None
 ) -> TranscriptionResult:
     """
     Transcribe large audio file using chunked processing with progress reporting.
@@ -205,6 +207,7 @@ async def transcribe_chunked(
         temperature: Temperature for transcription
         include_timestamps: Whether to include timestamps
         progress_callback: Optional callback for progress updates
+        job_dir: Optional job directory to save split audio files
         
     Returns:
         TranscriptionResult with complete transcription
@@ -261,11 +264,23 @@ async def transcribe_chunked(
     if progress_callback:
         progress_callback(0.9, "Merging transcription results...")
     
-    merged_text = merge_transcription_results(results, chunks, include_timestamps)
+    merged_text = merge_transcription_results(results, include_timestamps, chunk_minutes)
     
     # Calculate statistics
     word_count = len(merged_text.split())
     processing_time = time.time() - start_time
+    
+    # Copy chunks to job directory if specified
+    if job_dir:
+        import shutil
+        for chunk_path in chunks:
+            try:
+                chunk_filename = os.path.basename(chunk_path)
+                dest_path = os.path.join(job_dir, chunk_filename)
+                shutil.copy2(chunk_path, dest_path)
+                print(f"[DEBUG] Saved chunk to job directory: {dest_path}")
+            except Exception as e:
+                print(f"Warning: Failed to copy chunk {chunk_path} to job directory: {e}")
     
     # Cleanup temporary files
     from util import cleanup_chunks
@@ -285,16 +300,16 @@ async def transcribe_chunked(
 
 def merge_transcription_results(
     results: List[Dict],
-    chunk_paths: List[str],
-    include_timestamps: bool = True
+    include_timestamps: bool = True,
+    chunk_minutes: int = 5
 ) -> str:
     """
     Merge overlapping chunk transcription results intelligently.
     
     Args:
         results: List of transcription results from chunks
-        chunk_paths: List of chunk file paths
         include_timestamps: Whether to include timestamps in output
+        chunk_minutes: Duration of each chunk in minutes
         
     Returns:
         Merged transcription text with proper formatting
@@ -312,12 +327,13 @@ def merge_transcription_results(
             
         if include_timestamps:
             # Format with timestamp as per INITIAL.md: # HH:MM:SS --> HH:MM:SS
+            chunk_duration_seconds = chunk_minutes * 60
             start_time = format_duration(current_time)
-            end_time = format_duration(current_time + 300)  # 5 minutes default
+            end_time = format_duration(current_time + chunk_duration_seconds)
             
             segment = f"# {start_time} --> {end_time}\n{text}"
             merged_segments.append(segment)
-            current_time += 300  # Move forward 5 minutes
+            current_time += chunk_duration_seconds  # Move forward by actual chunk duration
         else:
             merged_segments.append(text)
     
