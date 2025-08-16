@@ -79,6 +79,15 @@ The application will start on `http://localhost:7860` by default.
 
 ## Architecture
 
+### Design Principles
+
+The application follows a handler-based architecture with complete separation of UI and business logic:
+
+- **UI/Logic Separation**: Gradio UI event handlers are completely separate from business logic
+- **Testable Architecture**: Business logic is testable with dependency injection and mock handlers
+- **Environment-based Configuration**: Support for production, testing, and mock UI modes
+- **Modular Design**: Clear separation of concerns with dedicated handlers for different features
+
 ### Project Structure
 
 ```
@@ -169,6 +178,21 @@ transcriber-web-app/
 6. **Chat** → Context injection → Interactive Q&A
 
 ### Configuration
+
+#### Configuration Override Pattern
+
+The application uses a two-tier configuration system for secure credential management:
+
+```python
+# Load base config from YAML
+base_config = load_yaml("config.yaml")
+
+# Override with environment variables for sensitive data
+if os.getenv("OPENAI_API_KEY"):
+    base_config["openai_api_key"] = os.getenv("OPENAI_API_KEY")
+```
+
+This allows secure credential management while maintaining default settings in version control.
 
 #### Environment Configuration
 - **`.env` file**: API keys and sensitive configuration
