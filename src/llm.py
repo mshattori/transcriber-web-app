@@ -226,14 +226,21 @@ def structured_completion(
     resp = openai.chat.completions.create(
         model=model,
         temperature=temperature,
-        response_format={"type": "json_object", "schema": json_schema},
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_response",
+                "schema": json_schema
+            }
+        },
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
     )
 
-    return resp.choices[0].message.model_dump()["content"]
+    content = resp.choices[0].message.content
+    return json.loads(content) if isinstance(content, str) else content
 
 
 def parse_transcript_to_json(transcript_text: str) -> List[Dict[str, str]]:

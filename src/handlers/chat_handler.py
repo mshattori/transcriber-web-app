@@ -28,15 +28,15 @@ class ChatHandler:
     def handle_message(
         self,
         message: str,
-        history: List[List[str]], 
+        history: List[Dict[str, str]], 
         settings: Dict[str, Any]
-    ) -> Tuple[List[List[str]], str]:
+    ) -> Tuple[List[Dict[str, str]], str]:
         """
         Handle chat message with context injection.
         
         Args:
             message: User message
-            history: Current chat history  
+            history: Current chat history in Gradio messages format
             settings: App settings including API key and model
             
         Returns:
@@ -69,11 +69,14 @@ class ChatHandler:
                 temperature=0.7
             )
         
-        # Update history
-        history.append([message, response])
-        return history, ""
+        # Update history in Gradio messages format
+        new_history = history.copy() if history else []
+        new_history.append({"role": "user", "content": message})
+        new_history.append({"role": "assistant", "content": response})
+        
+        return new_history, ""
     
-    def clear_history(self) -> List[List[str]]:
+    def clear_history(self) -> List[Dict[str, str]]:
         """
         Clear chat history.
         

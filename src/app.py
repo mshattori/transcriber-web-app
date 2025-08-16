@@ -14,6 +14,10 @@ from typing import Optional, Dict, Any, List, Tuple
 
 import gradio as gr
 from gradio import BrowserState
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Handler imports for separation of UI and business logic
 from handlers import (
@@ -129,8 +133,10 @@ def load_default_settings() -> Dict[str, Any]:
     """Load default settings from config.yaml."""
     try:
         config = load_config()
+        # Load API key from environment variable
+        api_key = os.getenv("OPENAI_API_KEY", "")
         return {
-            "api_key": "",
+            "api_key": api_key,
             "audio_model": config["audio_models"][0] if config["audio_models"] else "whisper-1",
             "language_model": config["language_models"][0] if config["language_models"] else "gpt-4o-mini",
             "system_message": config.get("system_message", ""),
@@ -140,8 +146,10 @@ def load_default_settings() -> Dict[str, Any]:
             "translation_enabled": False
         }
     except Exception:
+        # Load API key from environment variable even in fallback
+        api_key = os.getenv("OPENAI_API_KEY", "")
         return {
-            "api_key": "",
+            "api_key": api_key,
             "audio_model": "whisper-1",
             "language_model": "gpt-4o-mini", 
             "system_message": "あなたはプロフェッショナルで親切な文字起こしアシスタントです。",
@@ -519,9 +527,9 @@ def load_job_transcript(job_id: str) -> Tuple[str, str]:
 
 def handle_chat_message(
     message: str,
-    history: List[List[str]],
+    history: List[Dict[str, str]],
     settings: Dict[str, Any]
-) -> Tuple[List[List[str]], str]:
+) -> Tuple[List[Dict[str, str]], str]:
     """Handle chat message with context injection."""
     if not message.strip():
         return history, ""
@@ -552,15 +560,18 @@ def handle_chat_message(
                 temperature=0.7
             )
         
-        # Update history
-        history.append([message, response])
-        return history, ""
+        # Update history in Gradio messages format
+        new_history = history.copy() if history else []
+        new_history.append({"role": "user", "content": message})
+        new_history.append({"role": "assistant", "content": response})
+        
+        return new_history, ""
         
     except Exception as e:
         gr.Error(f"Chat error: {str(e)}")
         return history, ""
 
-def clear_chat_history() -> List[List[str]]:
+def clear_chat_history() -> List[Dict[str, str]]:
     """Clear chat history."""
     app_state.chat_history = []
     return []
