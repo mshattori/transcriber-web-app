@@ -159,20 +159,19 @@ def load_default_settings() -> Dict[str, Any]:
             "translation_enabled": False
         }
 
-def save_settings_to_browser_state(settings: Dict[str, Any], browser_state_value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Save settings to browser localStorage."""
+def ensure_settings_structure(browser_state_value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Ensure browser state has proper settings structure with defaults."""
     if not isinstance(browser_state_value, dict):
-        browser_state_value = {}
-    browser_state_value["settings"] = settings
-    return browser_state_value
-
-def load_settings_from_browser_state(browser_state_value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Load settings from browser localStorage with fallback to defaults."""
-    if isinstance(browser_state_value, dict) and "settings" in browser_state_value:
-        return browser_state_value["settings"]
+        print("No settings found in browser state, using defaults.")
+        return load_default_settings()
     
-    print("No settings found in browser state, using defaults.")
-    return load_default_settings()
+    # Fill in any missing keys with defaults
+    defaults = load_default_settings()
+    for key, default_value in defaults.items():
+        if key not in browser_state_value:
+            browser_state_value[key] = default_value
+    
+    return browser_state_value
 
 def validate_settings(settings: Dict[str, Any]) -> Tuple[bool, str]:
     """Validate user settings."""
@@ -607,7 +606,10 @@ def create_app(env: str = "prod"):
     
     with gr.Blocks(css=CUSTOM_CSS, title="Audio Transcription App") as app:
         # Browser state for settings persistence
-        browser_state = gr.BrowserState(load_default_settings)
+        browser_state = gr.BrowserState(
+            load_default_settings(),
+            storage_key="transcriber_app_settings"
+        )
         
         # Main layout - single column as specified
         with gr.Column():
@@ -867,7 +869,8 @@ def create_app(env: str = "prod"):
         # Settings functions
         
         def save_settings(api_key, audio_model, language_model, system_message, browser_state_value):
-            settings = load_settings_from_browser_state(browser_state_value)
+            # Ensure proper structure and merge with existing settings
+            settings = ensure_settings_structure(browser_state_value)
             settings.update({
                 "api_key": api_key,
                 "audio_model": audio_model,
@@ -875,10 +878,8 @@ def create_app(env: str = "prod"):
                 "system_message": system_message
             })
             
-            updated_browser_state = save_settings_to_browser_state(settings, browser_state_value)
-            
             gr.Info("Settings saved successfully!")
-            return updated_browser_state
+            return settings
         
         def reset_settings():
             default_settings = load_default_settings()
@@ -969,19 +970,28 @@ def create_app(env: str = "prod"):
         
         # Page load initialization - load settings from browser state
         def initialize_components(browser_state_value):
-            settings = load_settings_from_browser_state(browser_state_value)
+            settings = ensure_settings_structure(browser_state_value)
             return (
                 settings.get("audio_model", config["audio_models"][0] if config["audio_models"] else "whisper-1"),
                 settings.get("default_language", "auto"),
                 settings.get("chunk_minutes", 1),
                 settings.get("translation_enabled", False),
-                settings.get("default_translation_language", "Japanese")
+                settings.get("default_translation_language", "Japanese"),
+                # Settings panel fields
+                settings.get("api_key", ""),
+                settings.get("audio_model", config["audio_models"][0] if config["audio_models"] else "whisper-1"),
+                settings.get("language_model", config["language_models"][0] if config["language_models"] else "gpt-4o-mini"),
+                settings.get("system_message", config.get("system_message", ""))
             )
         
         app.load(
             initialize_components,
             inputs=[browser_state],
-            outputs=[audio_model, language_select, chunk_minutes, translation_enabled, translation_target]
+            outputs=[
+                audio_model, language_select, chunk_minutes, translation_enabled, translation_target,
+                # Settings panel fields
+                api_key_input, settings_audio_model, settings_language_model, system_message_input
+            ]
         )
     
     return app
