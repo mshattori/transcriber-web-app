@@ -1,14 +1,24 @@
 # Transcriber Web App
 
-A production-ready web application for transcribing large audio files using OpenAI's Whisper API, with support for translation and interactive chat functionality. Built with Gradio for an intuitive user interface.
+A production-ready web application for transcribing large audio files using OpenAI's Whisper API, with support for translation and interactive chat functionality. Built with Gradio featuring a modern tab-based interface for enhanced usability.
 
 ## Features
 
+### Core Functionality
 - **Large File Support**: Automatically chunks audio files up to 1 hour in length to bypass OpenAI's 25MB API limit
-- **Real-time Progress**: Live progress updates during transcription with chunk-by-chunk processing
+- **Real-time Progress**: Live progress updates during transcription with chunk-by-chunk processing and visual status indicators
 - **Multi-language Translation**: Structured JSON-based translation with OpenAI's structured outputs
 - **Interactive Chat**: Context-aware chat interface using transcription as context
-- **Job Management**: Persistent job history with downloadable results
+- **Job Management**: Persistent job history with downloadable results and deletion functionality
+
+### Modern UI Design
+- **Tab-based Navigation**: Clean organization with Main, Settings, and History tabs
+- **Intuitive Controls**: Dropdown-based configuration replacing sliders for better usability
+- **Real-time Status Display**: Progress indicators with visual dots and percentage completion
+- **Streaming Results**: Progressive transcription display as chunks are processed
+- **Enhanced Upload Interface**: Large, drag-and-drop file upload area
+
+### Technical Features
 - **Browser Settings**: Automatic settings persistence using localStorage
 - **Comprehensive Error Handling**: User-friendly error messages with detailed logging
 - **Memory Efficient**: Uses `tempfile.SpooledTemporaryFile` for large file processing
@@ -70,12 +80,25 @@ The application will start on `http://localhost:7860` by default.
 
 ## Usage
 
-1. **Upload Audio File**: Support for MP3, WAV, M4A, FLAC, OGG formats
-2. **Configure Settings**: Set API key, models, language preferences
-3. **Start Transcription**: Real-time progress with chunk processing
-4. **Optional Translation**: Enable translation to target language
-5. **Interactive Chat**: Ask questions about the transcribed content
-6. **Download Results**: Get transcripts and translations as files
+The application features a modern tab-based interface for enhanced usability:
+
+### Main Tab (Audio Processing)
+1. **Configure Settings**: Choose audio model, language, and chunk duration from dropdowns
+2. **Upload Audio File**: Support for MP3, WAV, M4A, FLAC, OGG formats via drag-and-drop
+3. **Start Transcription**: Real-time progress with visual status indicators and chunk processing
+4. **View Results**: Progressive transcription display with streaming text updates
+5. **Interactive Chat**: Collapsible chat interface for questions about transcribed content
+
+### Settings Tab (Configuration)
+- **API Configuration**: Set OpenAI API key, audio model, and language model
+- **System Message**: Customize AI assistant behavior
+- **Persistent Settings**: Automatic saving to browser localStorage
+
+### History Tab (Job Management)
+- **Job History**: View past transcription jobs with radio button selection
+- **Job Details**: Display comprehensive information for selected jobs
+- **Job Management**: Delete selected jobs and load previous transcripts
+- **Bulk Operations**: Refresh job list and manage multiple entries
 
 ## Architecture
 
@@ -117,6 +140,8 @@ transcriber-web-app/
 ├── data/                  # Job persistence (auto-created)
 │   └── {YYYY-MM-DD}/     # Date-based organization
 │       └── {job_id}/     # Individual job folders
+├── redesign.md           # UI redesign specifications and implementation plan
+├── mock-app.py          # UI prototype and testing application
 ├── sample.env            # Environment configuration template
 ├── requirements.txt       # Python dependencies
 ├── PLANNING.md           # Architecture and implementation plan
@@ -157,9 +182,11 @@ transcriber-web-app/
 
 #### 6. Web Interface (`app.py`)
 - **Environment-based handlers**: Production/test/mock mode support
-- **Single-column layout**: File upload → Controls → Progress → Results → Chat
+- **Modern tab-based layout**: Main/Settings/History tabs for organized functionality
+- **Enhanced Main tab**: Configuration → Upload → Processing → Status → Results → Chat
 - **Browser state management**: Settings persistence in localStorage
-- **Job history modal**: Access to previous transcriptions
+- **Improved History management**: Radio button job selection with details display
+- **Real-time status indicators**: Visual progress dots and streaming updates
 - **Error handling**: User-friendly error messages throughout
 
 #### 7. Error Management (`errors.py`)
@@ -176,6 +203,40 @@ transcriber-web-app/
 4. **Translation** (optional) → JSON parsing → Structured translation
 5. **Results** → File persistence → Download preparation
 6. **Chat** → Context injection → Interactive Q&A
+
+### UI Design Architecture
+
+The application implements a modern, tab-based interface design following the specifications in `redesign.md`:
+
+#### Interface Structure
+```
+┌─────────────────────────────────────────┐
+│ [Main] [Settings] [History]              │ ← Tab Navigation
+├─────────────────────────────────────────┤
+│ Configuration Panel                      │
+│ [Audio Model ▼] [Language ▼] [Duration ▼]│
+│ [Enable Translation ☑]                  │
+├─────────────────────────────────────────┤
+│ Upload Audio File                       │
+│ [📁 Drag & Drop Area]                   │
+├─────────────────────────────────────────┤
+│ [🎯 Start Processing]                   │
+├─────────────────────────────────────────┤
+│ Status: [●●●○○] Processing chunk 3/5... │ ← Real-time Status
+├─────────────────────────────────────────┤
+│ Transcription Results                   │ ← Streaming Display
+│ [Progressive text updates...]           │
+│ [💬 Chat Interface]                     │
+└─────────────────────────────────────────┘
+```
+
+#### Key UI Improvements
+- **Tab Navigation**: `gr.Tabs()` with Main/Settings/History organization
+- **Dropdown Controls**: Replaced sliders with `gr.Dropdown()` for better usability
+- **Visual Status Indicators**: HTML-based progress display with dots and percentages
+- **Streaming Results**: Progressive text updates using `yield` for real-time feedback
+- **Radio Button History**: Improved job selection replacing problematic table cells
+- **Separated Progress Display**: Isolated progress bars from content areas
 
 ### Configuration
 
@@ -240,6 +301,9 @@ python -m pytest tests/test_util.py -v
 
 # Run with coverage
 python -m pytest tests/ --cov=src --cov-report=html
+
+# Test the redesigned UI specifically
+APP_ENV=mock-ui python src/app.py  # Start with mock data for UI testing
 ```
 
 ### Test Structure
