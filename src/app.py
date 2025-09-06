@@ -9,6 +9,8 @@ import os
 import json
 import uuid
 import zipfile
+import time
+import tempfile
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -42,12 +44,115 @@ from util import (
     create_job_directory
 )
 
-# Custom CSS for styling as specified in INITIAL.md
+# Custom CSS for modern redesigned UI
 CUSTOM_CSS = """
-/* Light theme styling */
-.gradio-container {
-    max-width: 1200px !important;
-    margin: 0 auto;
+.status-container {
+    padding: 15px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    background: #f8f9fa;
+    margin: 10px 0;
+}
+
+.progress-dots {
+    font-size: 18px;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+    color: #007bff;
+}
+
+.progress-bar-container {
+    background: #e9ecef;
+    border-radius: 10px;
+    height: 8px;
+    margin-bottom: 8px;
+}
+
+.progress-bar {
+    background: linear-gradient(90deg, #007bff, #0056b3);
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.3s ease;
+}
+
+.status-message {
+    font-weight: 500;
+    color: #495057;
+}
+
+.tab-content {
+    padding: 20px 0;
+}
+
+.upload-area {
+    border: 2px dashed #ccc;
+    border-radius: 10px;
+    padding: 40px;
+    text-align: center;
+    background: #f8f9fa;
+    transition: all 0.3s ease;
+}
+
+.upload-area:hover {
+    border-color: #007bff;
+    background: #e3f2fd;
+}
+
+.config-section {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #e0e0e0;
+    margin-bottom: 20px;
+}
+
+.results-container {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+    min-height: 200px;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.chat-container {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 15px;
+    margin-top: 20px;
+}
+
+.job-selector {
+    background: white;
+    border-radius: 8px;
+    padding: 15px;
+    border: 1px solid #e0e0e0;
+}
+
+.job-selector input[type="radio"] {
+    margin-right: 10px;
+}
+
+.job-selector label {
+    display: block !important;
+    margin-bottom: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+}
+
+.job-selector label:hover {
+    background-color: #f8f9fa;
+}
+
+.job-selector input[type="radio"]:checked + span {
+    background-color: #e3f2fd;
+    font-weight: 500;
+}
+
+.job-details {
+    margin-top: 15px;
 }
 
 /* Timestamp styling for display */
@@ -55,65 +160,6 @@ CUSTOM_CSS = """
     font-size: 0.85rem;
     color: #888;
     font-weight: 500;
-}
-
-/* Processing log panel - minimal height with auto-scroll */
-.processing-log {
-    max-height: 120px;
-    overflow-y: auto;
-    font-family: monospace;
-    font-size: 0.9rem;
-    line-height: 1.4;
-}
-
-/* Results display panel - full width */
-.results-panel {
-    width: 100%;
-    min-height: 300px;
-}
-
-/* Toast notification styling */
-.toast-notification {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: #28a745;
-    color: white;
-    padding: 12px 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    z-index: 1000;
-    animation: slideIn 0.3s ease-out;
-}
-
-@keyframes slideIn {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-}
-
-/* Collapsible chat panel */
-.chat-panel {
-    border-top: 1px solid #e0e0e0;
-    margin-top: 20px;
-    padding-top: 20px;
-}
-
-/* Settings modal styling */
-.settings-modal {
-    max-width: 600px;
-}
-
-/* File upload area styling */
-.file-upload-area {
-    border: 2px dashed #ccc;
-    border-radius: 8px;
-    padding: 20px;
-    text-align: center;
-    transition: border-color 0.3s ease;
-}
-
-.file-upload-area:hover {
-    border-color: #007bff;
 }
 """
 
@@ -128,6 +174,31 @@ class AppState:
         self.processing_message: str = ""
 
 app_state = AppState()
+
+# Chunk duration options as dropdown choices
+CHUNK_DURATIONS = ["1 min", "2 min", "3 min", "5 min", "10 min"]
+
+def create_status_html(current_chunk: int, total_chunks: int, message: str) -> str:
+    """Create HTML for status indicator with progress dots and bar."""
+    if total_chunks == 0:
+        return """
+        <div class="status-container">
+            <div class="status-message">Ready to process audio file</div>
+        </div>
+        """
+    
+    progress_pct = (current_chunk / total_chunks) * 100
+    dots = "●" * current_chunk + "○" * (total_chunks - current_chunk)
+    
+    return f"""
+    <div class="status-container">
+        <div class="progress-dots">{dots}</div>
+        <div class="progress-bar-container">
+            <div class="progress-bar" style="width: {progress_pct}%"></div>
+        </div>
+        <div class="status-message">{message}</div>
+    </div>
+    """
 
 def load_default_settings() -> Dict[str, Any]:
     """Load default settings from config.yaml."""
@@ -575,6 +646,233 @@ def clear_chat_history() -> List[Dict[str, str]]:
     app_state.chat_history = []
     return []
 
+def toggle_translation_target(enabled):
+    """Toggle translation target dropdown visibility."""
+    return gr.update(visible=enabled)
+
+def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, settings_handler, env: str):
+    """Create the main tab with audio processing interface."""
+    with gr.TabItem("Main", elem_classes=["tab-content"]):
+        # Row 1: Configuration Panel
+        with gr.Group(elem_classes=["config-section"]):
+            gr.Markdown("### Configuration")
+            with gr.Row():
+                audio_model = gr.Dropdown(
+                    choices=config["audio_models"],
+                    value=config["audio_models"][0] if config["audio_models"] else "whisper-1",
+                    label="Audio Model",
+                    scale=1,
+                    interactive=True
+                )
+                language_select = gr.Dropdown(
+                    choices=["auto"] + list(config.get("translation_languages", {}).keys()),
+                    value="auto",
+                    label="Language",
+                    scale=1,
+                    interactive=True
+                )
+                chunk_duration = gr.Dropdown(
+                    choices=CHUNK_DURATIONS,
+                    value="1 min",
+                    label="Chunk Duration",
+                    scale=1,
+                    interactive=True
+                )
+            
+            with gr.Row():
+                translation_enabled = gr.Checkbox(
+                    label="Enable Translation",
+                    value=False,
+                    scale=1
+                )
+                translation_target = gr.Dropdown(
+                    choices=list(config.get("translation_languages", {}).keys()),
+                    value="Japanese",
+                    label="Translation Target",
+                    visible=False,
+                    scale=2,
+                    interactive=True
+                )
+        
+        # Row 2: File Upload
+        with gr.Group():
+            audio_input = gr.File(
+                label="Upload Audio File",
+                file_types=["audio"],
+                elem_classes=["upload-area"]
+            )
+        
+        # Row 3: Processing Control
+        with gr.Row():
+            process_btn = gr.Button(
+                "🎯 Start Processing",
+                variant="primary",
+                size="lg",
+                scale=1
+            )
+        
+        # Row 4: Status Indicator (separate from results)
+        with gr.Group():
+            status_display = gr.HTML(
+                value=create_status_html(0, 0, "Ready to process audio file")
+            )
+        
+        # Row 5: Results Display
+        with gr.Group(elem_classes=["results-container"]):
+            gr.Markdown("### Transcription Results")
+            results_display = gr.Textbox(
+                placeholder="Transcription results will appear here as processing completes...",
+                lines=10,
+                max_lines=15,
+                show_copy_button=True,
+                container=False
+            )
+            
+            with gr.Row():
+                download_btn = gr.DownloadButton(
+                    "📥 Download Results",
+                    size="sm",
+                    visible=False
+                )
+        
+        # Chat Interface
+        with gr.Group(elem_classes=["chat-container"]):
+            gr.Markdown("### Chat with Transcript")
+            with gr.Accordion("💬 Ask questions about your transcript", open=False):
+                chat_interface = gr.Chatbot(
+                    label="",
+                    height=250,
+                    type="messages"
+                )
+                with gr.Row():
+                    chat_input = gr.Textbox(
+                        placeholder="Ask a question about the transcript...",
+                        label="",
+                        scale=4
+                    )
+                    chat_send_btn = gr.Button("Send", scale=1)
+                    chat_clear_btn = gr.Button("Clear", scale=1)
+        
+        return {
+            "audio_input": audio_input,
+            "audio_model": audio_model,
+            "language_select": language_select,
+            "chunk_duration": chunk_duration,
+            "translation_enabled": translation_enabled,
+            "translation_target": translation_target,
+            "process_btn": process_btn,
+            "status_display": status_display,
+            "results_display": results_display,
+            "download_btn": download_btn,
+            "chat_interface": chat_interface,
+            "chat_input": chat_input,
+            "chat_send_btn": chat_send_btn,
+            "chat_clear_btn": chat_clear_btn
+        }
+
+def create_settings_tab(config: Dict[str, Any], settings_handler):
+    """Create the settings tab."""
+    with gr.TabItem("Settings", elem_classes=["tab-content"]):
+        gr.Markdown("### API Configuration")
+        
+        with gr.Group():
+            api_key_input = gr.Textbox(
+                label="OpenAI API Key",
+                type="password",
+                placeholder="sk-...",
+                info="Your OpenAI API key for transcription and chat services"
+            )
+            
+            with gr.Row():
+                settings_audio_model = gr.Dropdown(
+                    choices=config["audio_models"],
+                    value=config["audio_models"][0] if config["audio_models"] else "whisper-1",
+                    label="Default Audio Model",
+                    interactive=True
+                )
+                settings_language_model = gr.Dropdown(
+                    choices=config["language_models"],
+                    value=config["language_models"][0] if config["language_models"] else "gpt-4o-mini",
+                    label="Default Language Model",
+                    interactive=True
+                )
+            
+            system_message_input = gr.Textbox(
+                label="System Message",
+                value=config.get("system_message", "You are a helpful transcription assistant."),
+                lines=3,
+                info="Customize the AI assistant's behavior"
+            )
+        
+        # Settings controls
+        with gr.Row():
+            save_settings_btn = gr.Button(
+                "💾 Save Settings",
+                variant="primary"
+            )
+            reset_settings_btn = gr.Button(
+                "🔄 Reset to Default"
+            )
+        
+        return {
+            "api_key_input": api_key_input,
+            "settings_audio_model": settings_audio_model,
+            "settings_language_model": settings_language_model,
+            "system_message_input": system_message_input,
+            "save_settings_btn": save_settings_btn,
+            "reset_settings_btn": reset_settings_btn
+        }
+
+def create_history_tab(history_handler):
+    """Create the history tab with job management using Radio buttons."""
+    with gr.TabItem("History", elem_classes=["tab-content"]):
+        gr.Markdown("### Job History")
+        
+        with gr.Group():
+            # Create radio button options from job data with vertical layout
+            job_history = history_handler.get_job_history()
+            job_options = []
+            for job in job_history:
+                job_id, timestamp, filename, duration, language, status = job
+                # Format as compact readable option for vertical layout
+                status_icon = "✅" if status == "Completed" else "❌"
+                if timestamp:
+                    date_part = timestamp.split()[0] if " " in timestamp else timestamp[:10]
+                    time_part = timestamp.split()[1] if " " in timestamp else timestamp[11:19]
+                else:
+                    date_part = "N/A"
+                    time_part = "N/A"
+                label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} {status_icon}"
+                job_options.append((label, job_id))
+            
+            job_selector = gr.Radio(
+                choices=job_options,
+                label="Select Job",
+                value=None,
+                elem_classes=["job-selector"]
+            )
+            
+            # Job details display
+            with gr.Group():
+                gr.Markdown("### Selected Job Details")
+                job_details_display = gr.HTML(
+                    value="<p style='color: #888; text-align: center;'>Select a job above to view details</p>",
+                    elem_classes=["job-details"]
+                )
+            
+            with gr.Row():
+                refresh_btn = gr.Button("🔄 Refresh", size="sm")
+                delete_btn = gr.Button("🗑️ Delete Selected", size="sm", variant="stop")
+                load_btn = gr.Button("📄 Load Transcript", size="sm", variant="primary")
+        
+        return {
+            "job_selector": job_selector,
+            "job_details_display": job_details_display,
+            "refresh_btn": refresh_btn,
+            "delete_btn": delete_btn,
+            "load_btn": load_btn
+        }
+
 # Create the Gradio interface
 def create_app(env: str = "prod"):
     """
@@ -611,260 +909,51 @@ def create_app(env: str = "prod"):
             storage_key="transcriber_app_settings"
         )
         
-        # Main layout - single column as specified
-        with gr.Column():
-            # Header
-            gr.HTML("<h1 style='text-align: center; margin-bottom: 30px;'>🎵 Audio Transcription & Translation</h1>")
-            
-            # Row 1: File upload and controls
-            with gr.Row():
-                with gr.Column(scale=3):
-                    audio_input = gr.File(
-                        label="Upload Audio File",
-                        file_types=["audio"],
-                        elem_classes=["file-upload-area"]
-                    )
-                
-                with gr.Column(scale=2):
-                    # Model selections and controls
-                    audio_model = gr.Dropdown(
-                        choices=config["audio_models"],
-                        value=config["audio_models"][0] if config["audio_models"] else "whisper-1",
-                        label="Audio Model",
-                        interactive=True
-                    )
-                    
-                    language_select = gr.Dropdown(
-                        choices=["auto"] + list(config.get("translation_languages", {}).keys()),
-                        value="auto",
-                        label="Language",
-                        interactive=True
-                    )
-                    
-                    chunk_minutes = gr.Slider(
-                        minimum=1,
-                        maximum=10,
-                        value=1,
-                        step=1,
-                        label="Chunk Duration (minutes)",
-                        interactive=True
-                    )
-                    
-                    translation_enabled = gr.Checkbox(
-                        label="Enable Translation",
-                        value=False
-                    )
-                    
-                    translation_target = gr.Dropdown(
-                        choices=list(config.get("translation_languages", {}).keys()),
-                        value="Japanese",
-                        label="Translation Target",
-                        visible=False,
-                        interactive=True
-                    )
-            
-            # Row 2: Action buttons
-            with gr.Row():
-                process_btn = gr.Button("🎯 Start Processing", variant="primary", size="lg")
-            
-            # Row 3: Progress display
-            progress_display = gr.Progress()
-            
-            # Row 4: Processing log panel (minimal height)
-            with gr.Accordion("Processing Log", open=False):
-                processing_log = gr.Textbox(
-                    label="",
-                    lines=4,
-                    max_lines=4,
-                    elem_classes=["processing-log"],
-                    interactive=False
-                )
-            
-            # Row 5: Results display panel (full width)
-            with gr.Tab("Results"):
-                with gr.Row():
-                    with gr.Column():
-                        gr.HTML("<h3>Original Transcript</h3>")
-                        transcript_display = gr.HTML(
-                            elem_classes=["results-panel"],
-                            value="<p style='color: #888; text-align: center;'>No transcript yet. Upload an audio file to get started.</p>"
-                        )
-                        
-                        with gr.Row():
-                            copy_transcript_btn = gr.Button("📋 Copy", size="sm")
-                            download_transcript_btn = gr.DownloadButton(
-                                "⬇️ Download",
-                                size="sm",
-                                visible=False
-                            )
-                
-                with gr.Column(visible=False) as translation_column:
-                    gr.HTML("<h3>Translation</h3>")
-                    translation_display = gr.HTML(
-                        elem_classes=["results-panel"]
-                    )
-                    
-                    with gr.Row():
-                        copy_translation_btn = gr.Button("📋 Copy", size="sm")
-                        download_translation_btn = gr.DownloadButton(
-                            "⬇️ Download ZIP",
-                            size="sm",
-                            visible=False
-                        )
-            
-            # Row 6: Chat panel (collapsible, at bottom)
-            with gr.Accordion("💬 Chat with Transcript", open=False):
-                chat_interface = gr.Chatbot(
-                    label="Ask questions about your transcript",
-                    height=300,
-                    elem_classes=["chat-panel"],
-                    type="messages"
-                )
-                
-                with gr.Row():
-                    chat_input = gr.Textbox(
-                        placeholder="Ask a question about the transcript...",
-                        label="",
-                        scale=4
-                    )
-                    chat_send_btn = gr.Button("Send", scale=1)
-                    chat_clear_btn = gr.Button("Clear", scale=1)
+        # Main tab navigation
+        with gr.Tabs():
+            main_components = create_main_tab(config, audio_handler, chat_handler, settings_handler, env)
+            settings_components = create_settings_tab(config, settings_handler)
+            history_components = create_history_tab(history_handler)
         
-        # Settings Panel
-        with gr.Accordion("⚙️ Settings", open=False) as settings_panel:
-            gr.HTML("<h2>⚙️ Settings</h2>")
-            
-            with gr.Column():
-                api_key_input = gr.Textbox(
-                    label="OpenAI API Key",
-                    type="password",
-                    placeholder="sk-..."
-                )
-                
-                with gr.Row():
-                    settings_audio_model = gr.Dropdown(
-                        choices=config["audio_models"],
-                        label="Audio Model"
-                    )
-                    
-                    settings_language_model = gr.Dropdown(
-                        choices=config["language_models"],
-                        label="Language Model"
-                    )
-                
-                system_message_input = gr.Textbox(
-                    label="System Message",
-                    value=config.get("system_message", ""),
-                    lines=3
-                )
-                
-                with gr.Row():
-                    save_settings_btn = gr.Button("💾 Save Settings", variant="primary")
-                    reset_settings_btn = gr.Button("🔄 Reset to Default")
+        # Extract components for event handling
+        audio_input = main_components["audio_input"]
+        audio_model = main_components["audio_model"]
+        language_select = main_components["language_select"]
+        chunk_duration = main_components["chunk_duration"]
+        translation_enabled = main_components["translation_enabled"]
+        translation_target = main_components["translation_target"]
+        process_btn = main_components["process_btn"]
+        status_display = main_components["status_display"]
+        results_display = main_components["results_display"]
+        download_btn = main_components["download_btn"]
+        chat_interface = main_components["chat_interface"]
+        chat_input = main_components["chat_input"]
+        chat_send_btn = main_components["chat_send_btn"]
+        chat_clear_btn = main_components["chat_clear_btn"]
         
-        # History Panel  
-        with gr.Accordion("📋 Job History", open=False) as history_panel:
-            gr.HTML("<h2>📋 Job History</h2>")
-            
-            history_table = gr.Dataframe(
-                headers=["Job ID", "Timestamp", "Filename", "Duration", "Language", "Status"],
-                value=get_job_history(),
-                interactive=False
-            )
-            
-            with gr.Row():
-                refresh_history_btn = gr.Button("🔄 Refresh")
+        api_key_input = settings_components["api_key_input"]
+        settings_audio_model = settings_components["settings_audio_model"]
+        settings_language_model = settings_components["settings_language_model"]
+        system_message_input = settings_components["system_message_input"]
+        save_settings_btn = settings_components["save_settings_btn"]
+        reset_settings_btn = settings_components["reset_settings_btn"]
+        
+        job_selector = history_components["job_selector"]
+        job_details_display = history_components["job_details_display"]
+        refresh_btn = history_components["refresh_btn"]
+        delete_btn = history_components["delete_btn"]
+        load_btn = history_components["load_btn"]
         
         # Event handlers
         
         # Show/hide translation controls
-        def toggle_translation_visibility(enabled):
-            return gr.update(visible=enabled)
-        
         translation_enabled.change(
-            toggle_translation_visibility,
+            toggle_translation_target,
             inputs=[translation_enabled],
             outputs=[translation_target]
         )
         
-        # Main processing function
-        async def process_audio_wrapper(
-            audio_file, 
-            browser_state_value, 
-            audio_model_val,
-            language_select_val,
-            chunk_minutes_val,
-            translation_enabled_val,
-            translation_target_val,
-            progress=progress_display
-        ):
-            # Load settings from browser state using handler
-            base_settings = settings_handler.load_settings_from_browser_state(browser_state_value)
-            
-            ui_settings = {
-                "audio_model": audio_model_val,
-                "default_language": language_select_val,
-                "chunk_minutes": chunk_minutes_val,
-                "translation_enabled": translation_enabled_val,
-                "default_translation_language": translation_target_val if translation_enabled_val else ""
-            }
-            
-            # Merge settings using handler
-            settings = settings_handler.merge_settings(base_settings, ui_settings)
-            
-            # Use audio handler for processing
-            try:
-                result = await audio_handler.process_audio(
-                    audio_file, 
-                    settings,
-                    lambda p, m: progress(p, m) if progress else None
-                )
-                
-                transcript = result.transcript
-                translation = result.translation
-                job_id = result.job_id
-                settings_used = result.settings_used
-            except Exception as e:
-                from errors import get_user_friendly_message
-                error_msg = get_user_friendly_message(e) if hasattr(e, '__class__') else str(e)
-                raise gr.Error(error_msg)
-            
-            # Format for display
-            transcript_html = format_transcript_for_display(transcript)
-            translation_html = format_transcript_for_display(translation) if translation else ""
-            
-            # Create download files (skip in mock mode since files don't exist)
-            download_path = None
-            if env != "mock-ui":
-                download_path = create_download_files(job_id, settings_used)
-            
-            return (
-                transcript_html,
-                translation_html,
-                gr.update(visible=bool(download_path), value=download_path) if download_path else gr.update(visible=False),
-                gr.update(visible=bool(translation) and bool(download_path), value=download_path) if download_path else gr.update(visible=False),
-                f"Processing completed! Job ID: {job_id}"
-            )
-        
-        process_btn.click(
-            process_audio_wrapper,
-            inputs=[
-                audio_input, 
-                browser_state,
-                audio_model,
-                language_select,
-                chunk_minutes,
-                translation_enabled,
-                translation_target
-            ],
-            outputs=[
-                transcript_display,
-                translation_display,
-                download_transcript_btn,
-                download_translation_btn,
-                processing_log
-            ]
-        )
+        # This section was already replaced with the new process_audio function above
         
         # Settings functions
         
@@ -903,32 +992,7 @@ def create_app(env: str = "prod"):
             outputs=[api_key_input, settings_audio_model, settings_language_model, system_message_input]
         )
         
-        # Close settings button removed - using accordion instead
-        
-        # History functions with handler
-        def refresh_history():
-            return history_handler.get_job_history()
-        
-        def load_selected_job(table_data, selected_index):
-            if not table_data or selected_index is None:
-                gr.Warning("Please select a job to load")
-                return "", "", gr.update(visible=False)
-            
-            job_id = table_data[selected_index][0]
-            transcript, translation = history_handler.load_job_transcript(job_id)
-            
-            transcript_html = format_transcript_for_display(transcript)
-            translation_html = format_transcript_for_display(translation) if translation else ""
-            
-            gr.Info(f"Loaded job {job_id}")
-            return transcript_html, translation_html
-        
-        # History button removed - using accordion instead
-        
-        refresh_history_btn.click(
-            refresh_history,
-            outputs=[history_table]
-        )
+        # History functions are now handled in the history tab event handlers above
         
         # Chat functions with handler
         def handle_chat_wrapper(message, history, browser_state_value):
@@ -957,16 +1021,6 @@ def create_app(env: str = "prod"):
             outputs=[chat_interface]
         )
         
-        # Copy functions (using browser clipboard)
-        copy_transcript_btn.click(
-            lambda: gr.Info("Transcript copied to clipboard!"),
-            js="() => navigator.clipboard.writeText(document.querySelector('.results-panel').innerText)"
-        )
-        
-        copy_translation_btn.click(
-            lambda: gr.Info("Translation copied to clipboard!"),
-            js="() => navigator.clipboard.writeText(document.querySelector('.results-panel').innerText)"
-        )
         
         # Page load initialization - load settings from browser state
         def initialize_components(browser_state_value):
@@ -974,7 +1028,7 @@ def create_app(env: str = "prod"):
             return (
                 settings.get("audio_model", config["audio_models"][0] if config["audio_models"] else "whisper-1"),
                 settings.get("default_language", "auto"),
-                settings.get("chunk_minutes", 1),
+                "1 min",  # Default chunk duration
                 settings.get("translation_enabled", False),
                 settings.get("default_translation_language", "Japanese"),
                 # Settings panel fields
@@ -988,7 +1042,7 @@ def create_app(env: str = "prod"):
             initialize_components,
             inputs=[browser_state],
             outputs=[
-                audio_model, language_select, chunk_minutes, translation_enabled, translation_target,
+                audio_model, language_select, chunk_duration, translation_enabled, translation_target,
                 # Settings panel fields
                 api_key_input, settings_audio_model, settings_language_model, system_message_input
             ]
