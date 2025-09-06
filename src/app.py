@@ -958,17 +958,17 @@ def create_app(env: str = "prod"):
         # Settings functions
         
         def save_settings(api_key, audio_model, language_model, system_message, browser_state_value):
-            # Ensure proper structure and merge with existing settings
-            settings = ensure_settings_structure(browser_state_value)
-            settings.update({
+            # Use settings handler for proper saving
+            new_settings = {
                 "api_key": api_key,
                 "audio_model": audio_model,
                 "language_model": language_model,
                 "system_message": system_message
-            })
+            }
+            updated_settings = settings_handler.save_settings_to_browser_state(new_settings, browser_state_value)
             
             gr.Info("Settings saved successfully!")
-            return settings
+            return updated_settings
         
         def reset_settings():
             default_settings = load_default_settings()
@@ -978,6 +978,97 @@ def create_app(env: str = "prod"):
                 default_settings.get("language_model", ""),
                 default_settings.get("system_message", "")
             )
+        
+        # Processing functions for audio
+        async def process_audio_wrapper(
+            audio_file, 
+            browser_state_value, 
+            audio_model_val,
+            language_select_val,
+            chunk_duration_val,
+            translation_enabled_val,
+            translation_target_val
+        ):
+            """Process audio file with new UI structure."""
+            # Load settings from browser state using handler
+            base_settings = settings_handler.load_settings_from_browser_state(browser_state_value)
+            
+            # Convert chunk duration from dropdown to minutes
+            chunk_minutes = int(chunk_duration_val.split()[0])
+            
+            # Convert language name to language code if not "auto"
+            language_code = language_select_val
+            if language_select_val != "auto":
+                from llm import get_language_code
+                language_code = get_language_code(language_select_val)
+            
+            ui_settings = {
+                "audio_model": audio_model_val,
+                "default_language": language_code,
+                "chunk_minutes": chunk_minutes,
+                "translation_enabled": translation_enabled_val,
+                "default_translation_language": translation_target_val if translation_enabled_val else ""
+            }
+            
+            # Merge settings using handler
+            settings = settings_handler.merge_settings(base_settings, ui_settings)
+            
+            # Use audio handler for processing
+            try:
+                result = await audio_handler.process_audio(
+                    audio_file, 
+                    settings
+                )
+                
+                transcript = result.transcript
+                translation = result.translation
+                job_id = result.job_id
+                settings_used = result.settings_used
+                
+                # Store current transcript for chat
+                app_state.current_transcript = transcript
+                
+                # Show download button and update status
+                return (
+                    transcript,
+                    create_status_html(0, 0, "Processing completed successfully!"),
+                    gr.update(visible=True)
+                )
+                
+            except Exception as e:
+                from errors import get_user_friendly_message
+                error_msg = get_user_friendly_message(e) if hasattr(e, '__class__') else str(e)
+                return (
+                    f"Error: {error_msg}",
+                    create_status_html(0, 0, f"Processing failed: {error_msg}"),
+                    gr.update(visible=False)
+                )
+        
+        # Process button click handler
+        process_btn.click(
+            process_audio_wrapper,
+            inputs=[
+                audio_input,
+                browser_state,
+                audio_model,
+                language_select,
+                chunk_duration,
+                translation_enabled,
+                translation_target
+            ],
+            outputs=[
+                results_display,
+                status_display,
+                download_btn
+            ]
+        )
+        
+        # Translation target visibility toggle
+        translation_enabled.change(
+            toggle_translation_target,
+            inputs=[translation_enabled],
+            outputs=[translation_target]
+        )
         
         # Settings button removed - using accordion instead
         
