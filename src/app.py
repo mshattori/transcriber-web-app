@@ -958,17 +958,19 @@ def create_app(env: str = "prod"):
         # Settings functions
         
         def save_settings(api_key, audio_model, language_model, system_message, browser_state_value):
-            # Use settings handler for proper saving
-            new_settings = {
+            # Ensure proper structure and merge with existing settings
+            current_settings = ensure_settings_structure(browser_state_value)
+            
+            # Update with new settings
+            current_settings.update({
                 "api_key": api_key,
                 "audio_model": audio_model,
                 "language_model": language_model,
                 "system_message": system_message
-            }
-            updated_settings = settings_handler.save_settings_to_browser_state(new_settings, browser_state_value)
+            })
             
             gr.Info("Settings saved successfully!")
-            return updated_settings
+            return current_settings
         
         def reset_settings():
             default_settings = load_default_settings()
@@ -990,8 +992,8 @@ def create_app(env: str = "prod"):
             translation_target_val
         ):
             """Process audio file with new UI structure."""
-            # Load settings from browser state using handler
-            base_settings = settings_handler.load_settings_from_browser_state(browser_state_value)
+            # Load settings from browser state
+            base_settings = ensure_settings_structure(browser_state_value)
             
             # Convert chunk duration from dropdown to minutes
             chunk_minutes = int(chunk_duration_val.split()[0])
@@ -1087,7 +1089,7 @@ def create_app(env: str = "prod"):
         
         # Chat functions with handler
         def handle_chat_wrapper(message, history, browser_state_value):
-            settings = settings_handler.load_settings_from_browser_state(browser_state_value)
+            settings = ensure_settings_structure(browser_state_value)
             
             # Set context for chat handler
             context_text = app_state.current_transcript or ""
