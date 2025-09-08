@@ -6,7 +6,8 @@ Custom exceptions and error utilities for better user experience and debugging.
 
 import logging
 import traceback
-from typing import Optional, Dict, Any
+import os
+from typing import Optional, Dict, Any, Tuple
 from enum import Enum
 import openai
 
@@ -113,6 +114,30 @@ class UIError(TranscriberError):
         super().__init__(message, ErrorType.UI, {"component": component, "action": action})
         self.component = component
         self.action = action
+
+
+class TranslationError(TranscriberError):
+    """Raised when translation operations fail."""
+    
+    def __init__(self, message: str, transcript_available: bool = True, partial_translation: Optional[str] = None):
+        super().__init__(message, ErrorType.PROCESSING, {
+            "transcript_available": transcript_available,
+            "partial_translation": partial_translation
+        })
+        self.transcript_available = transcript_available
+        self.partial_translation = partial_translation
+
+
+class IntegratedDisplayError(TranscriberError):
+    """Raised when integrated display generation fails."""
+    
+    def __init__(self, message: str, transcript: Optional[str] = None, translation: Optional[str] = None):
+        super().__init__(message, ErrorType.PROCESSING, {
+            "transcript_available": bool(transcript),
+            "translation_available": bool(translation)
+        })
+        self.transcript = transcript
+        self.translation = translation
 
 
 def validate_api_key(api_key: str) -> None:
@@ -427,6 +452,105 @@ def setup_error_logging(log_level: str = "INFO", log_file: Optional[str] = None)
     )
 
 
+def handle_translation_failure(
+    transcript: str, 
+    error: Exception, 
+    partial_translation: Optional[str] = None
+) -> Tuple[str, str, TranslationError]:
+    """
+    Handle translation failure gracefully while preserving transcript.
+    
+    Args:
+        transcript: Successfully transcribed text
+        error: Translation error that occurred
+        partial_translation: Any partial translation that was completed
+        
+    Returns:
+        Tuple of (transcript, fallback_translation, translation_error)
+    """
+    # Create user-friendly error message for translation failure
+    if "rate limit" in str(error).lower():
+        error_msg = "Translation rate limit exceeded. Please try again later."
+    elif "quota" in str(error).lower() or "billing" in str(error).lower():
+        error_msg = "Translation quota exceeded. Please check your OpenAI account."
+    elif "timeout" in str(error).lower() or "connection" in str(error).lower():
+        error_msg = "Translation service timeout. Please try again."
+    else:
+        error_msg = f"Translation service error: {str(error)}"
+    
+    # Create fallback translation text with error information
+    fallback_translation = f"[Translation Error]\n{error_msg}\n\nTranscription completed successfully. You can download the transcript and try translation again later."
+    
+    # If we have partial translation, include it
+    if partial_translation and partial_translation.strip():
+        fallback_translation += f"\n\n[Partial Translation]\n{partial_translation}"
+    
+    translation_error = TranslationError(
+        error_msg,
+        transcript_available=True,
+        partial_translation=partial_translation
+    )
+    
+    return transcript, fallback_translation, translation_error
+
+
+def handle_file_read_failure(
+    file_path: str, 
+    error: Exception, 
+    fallback_content: str = ""
+) -> Tuple[str, FileError]:
+    """
+    Handle file reading failure with fallback content.
+    
+    Args:
+        file_path: Path to file that failed to read
+        error: File reading error that occurred
+        fallback_content: Fallback content to use
+        
+    Returns:
+        Tuple of (content, file_error)
+    """
+    error_msg = f"Failed to read file {os.path.basename(file_path)}: {str(error)}"
+    
+    file_error = FileError(
+        error_msg,
+        file_path=file_path,
+        operation="read"
+    )
+    
+    return fallback_content, file_error
+
+
+def handle_integrated_display_failure(
+    transcript: str, 
+    translation: str, 
+    error: Exception
+) -> Tuple[str, IntegratedDisplayError]:
+    """
+    Handle integrated display generation failure with fallback.
+    
+    Args:
+        transcript: Original transcript text
+        translation: Translation text
+        error: Display generation error that occurred
+        
+    Returns:
+        Tuple of (fallback_display_text, integrated_display_error)
+    """
+    error_msg = f"Failed to generate integrated display: {str(error)}"
+    
+    # Fallback to transcript only
+    fallback_display = transcript
+    
+    integrated_error = IntegratedDisplayError(
+        error_msg,
+        transcript=transcript,
+        translation=translation
+    )
+    
+    return fallback_display, integrated_error
+
+
 def create_error_report(error: TranscriberError) -> Dict[str, Any]:
     """
     Create detailed error report for debugging.
@@ -464,7 +588,11 @@ ERROR_MESSAGES = {
     "settings_invalid": "Invalid settings. Please check your configuration.",
     "job_not_found": "Job not found. It may have been deleted or moved.",
     "insufficient_quota": "OpenAI API quota exceeded. Please check your OpenAI account billing.",
-    "model_unavailable": "Selected model is not available. Please choose a different model."
+    "model_unavailable": "Selected model is not available. Please choose a different model.",
+    "translation_partial_failure": "Translation partially failed. Transcription completed successfully, but some translation segments may be missing.",
+    "integrated_display_failed": "Failed to generate integrated display. Showing transcription only.",
+    "file_read_failed": "Failed to read file. Using fallback content.",
+    "translation_service_unavailable": "Translation service is temporarily unavailable. Transcription completed successfully."
 }
 
 
@@ -478,6 +606,17 @@ def get_user_friendly_message(error: TranscriberError) -> str:
     Returns:
         User-friendly error message
     """
+    # Handle translation-specific errors
+    if isinstance(error, TranslationError):
+        if error.transcript_available:
+            return ERROR_MESSAGES["translation_failed"]
+        else:
+            return f"Translation failed: {error.message}"
+    
+    # Handle integrated display errors
+    if isinstance(error, IntegratedDisplayError):
+        return ERROR_MESSAGES["integrated_display_failed"]
+    
     # Map specific errors to user-friendly messages
     if error.error_type == ErrorType.API and hasattr(error, 'status_code') and error.status_code == 401:
         return ERROR_MESSAGES["api_key_missing"]

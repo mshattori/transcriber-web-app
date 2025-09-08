@@ -343,3 +343,29 @@ def create_job_directory(job_id: str) -> str:
     
     os.makedirs(job_dir, exist_ok=True)
     return job_dir
+
+
+def find_job_directory(job_id: str) -> Optional[str]:
+    """
+    Find job directory by searching through date-based folders.
+    
+    Args:
+        job_id: Unique job identifier
+        
+    Returns:
+        Path to job directory if found, None otherwise
+    """
+    # Get the absolute path of the project root directory (one level up from src)
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    data_root = os.path.join(project_root, "data")
+    
+    if not os.path.exists(data_root):
+        return None
+    
+    # Search through date folders
+    for date_folder in os.listdir(data_root):
+        potential_path = os.path.join(data_root, date_folder, job_id)
+        if os.path.exists(potential_path):
+            return potential_path
+    
+    return None

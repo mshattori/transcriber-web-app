@@ -11,6 +11,7 @@ import uuid
 import zipfile
 import time
 import tempfile
+import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -20,6 +21,12 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Setup logging for debugging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Handler imports for separation of UI and business logic
 from handlers import (
@@ -286,149 +293,48 @@ async def process_audio_file(
     progress: gr.Progress = None
 ) -> Tuple[str, str, str, Dict[str, Any]]:
     """
-    Process audio file with transcription and optional translation.
+    Process audio file with transcription and optional translation using AudioHandler.
     
     Returns:
-        Tuple of (transcript_text, translation_text, job_id, settings_used)
+        Tuple of (display_text, translation_text, job_id, settings_used)
     """
     # Load persistent settings and merge UI settings
     settings = load_settings_from_browser_state(browser_state_value)
     settings.update(ui_settings)
+    
     from errors import (
         TranscriberError, ValidationError, APIError, FileError, 
-        get_user_friendly_message, safe_execute
+        TranslationError, IntegratedDisplayError,
+        get_user_friendly_message
     )
     
     try:
         print(f"[DEBUG] Received audio file: {audio_file}")
-        # Validate inputs
-        if not audio_file:
-            raise ValidationError("No audio file provided", field="audio_file")
         
-        # Validate settings
-        is_valid, error_msg = validate_settings(settings)
-        if not is_valid:
-            raise ValidationError(error_msg, field="settings")
+        # Get the appropriate audio handler based on environment
+        config = AppConfig()
+        if config.env == "mock-ui":
+            audio_handler = MockAudioHandler()
+        else:
+            audio_handler = AudioHandler()
         
-        # Validate audio file with comprehensive checking
-        is_valid_file, error_msg, file_info = validate_audio_file(audio_file)
-        if not is_valid_file:
-            raise ValidationError(f"Invalid audio file: {error_msg}", field="audio_file")
+        # Process audio using the handler
+        result = await audio_handler.process_audio(
+            audio_file,
+            settings,
+            progress_callback=lambda p, m: progress(p, m) if progress else None
+        )
         
-        # Show file size warning if needed
-        if file_info.get('needs_warning', False):
-            gr.Warning(f"Large file detected ({file_info['size_mb']:.1f}MB). Processing may take longer.")
-        
-        # Create job directory
-        job_id = str(uuid.uuid4())[:8]
-        job_dir = create_job_directory(job_id)
-        app_state.current_job_id = job_id
-        
-        def _process_transcription():
-            # Estimate processing time
-            time_estimates = estimate_processing_time(
-                file_info['size_mb'], 
-                settings['chunk_minutes']
-            )
-            
-            if progress:
-                progress(0.1, f"Starting transcription ({time_estimates['estimated_chunks']} chunks expected)")
-            
-            return time_estimates
-        
-        _ = safe_execute(_process_transcription, error_context="estimating processing time")
-        
-        # Step 1-4: Transcription with chunked processing
-        try:
-            transcript_result = await transcribe_chunked(
-                audio_path=audio_file,
-                api_key=settings["api_key"],
-                model=settings["audio_model"],
-                language=settings["default_language"],
-                chunk_minutes=settings["chunk_minutes"],
-                temperature=0.0,
-                include_timestamps=True,
-                progress_callback=lambda p, m: progress(0.1 + p * 0.6, m) if progress else None,
-                job_dir=job_dir
-            )
-            
-            transcript_text = transcript_result.text
-            app_state.current_transcript = transcript_text
-            
-        except TranscriberError as e:
-            raise e  # Re-raise our custom errors
-        except Exception as e:
-            raise APIError(f"Transcription failed: {str(e)}", api_name="OpenAI")
-        
-        # Save original transcript
-        def _save_transcript():
-            transcript_path = os.path.join(job_dir, "transcript.txt")
-            with open(transcript_path, 'w', encoding='utf-8') as f:
-                f.write(transcript_text)
-            return transcript_path
-        
-        safe_execute(_save_transcript, error_context="saving transcript")
-        
-        translation_text = ""
-        
-        # Translation if enabled
-        if settings.get("translation_enabled", False):
-            try:
-                if progress:
-                    progress(0.7, "Starting translation...")
-                
-                translation_result = await translate_transcript_full(
-                    api_key=settings["api_key"],
-                    model=settings["language_model"],
-                    transcript_text=transcript_text,
-                    target_language=settings["default_translation_language"],
-                    temperature=0.3,
-                    progress_callback=lambda p, m: progress(0.7 + p * 0.25, m) if progress else None
-                )
-                
-                translation_text = translation_result.translated_text
-                app_state.current_translation = translation_text
-                
-                # Save translation
-                def _save_translation():
-                    lang_code = settings["default_translation_language"].lower()[:2]
-                    translation_path = os.path.join(job_dir, f"transcript.{lang_code}.txt")
-                    with open(translation_path, 'w', encoding='utf-8') as f:
-                        f.write(translation_text)
-                
-                safe_execute(_save_translation, error_context="saving translation")
-                
-            except TranscriberError as e:
-                # Translation failed, but transcription succeeded
-                gr.Warning(f"Translation failed: {get_user_friendly_message(e)}. Transcription was successful.")
-                translation_text = ""  # Clear translation on error
-        
-        # Save job metadata
-        def _save_metadata():
-            job_metadata = {
-                "job_id": job_id,
-                "timestamp": datetime.now().isoformat(),
-                "original_filename": os.path.basename(audio_file),
-                "file_info": file_info,
-                "settings": settings,
-                "transcript_stats": {
-                    "word_count": transcript_result.word_count,
-                    "duration": transcript_result.total_duration,
-                    "processing_time": transcript_result.processing_time
-                },
-                "translation_enabled": settings.get("translation_enabled", False)
-            }
-            
-            metadata_path = os.path.join(job_dir, "metadata.json")
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(job_metadata, f, indent=2, ensure_ascii=False)
-        
-        safe_execute(_save_metadata, error_context="saving job metadata")
+        # Update app state
+        app_state.current_job_id = result.job_id
+        app_state.current_transcript = result.transcript
+        app_state.current_translation = result.translation
         
         if progress:
             progress(1.0, "Processing completed!")
         
-        return transcript_text, translation_text, job_id, settings
+        # Return display_text instead of transcript for UI
+        return result.display_text, result.translation, result.job_id, result.settings_used
         
     except ValidationError as e:
         raise gr.Error(get_user_friendly_message(e))
@@ -436,6 +342,18 @@ async def process_audio_file(
         raise gr.Error(get_user_friendly_message(e))
     except FileError as e:
         raise gr.Error(get_user_friendly_message(e))
+    except TranslationError as e:
+        # For translation errors, show warning but don't fail completely
+        import logging
+        logging.warning(f"Translation failed: {str(e)}")
+        # Return the result with error message in translation field
+        return result.display_text, result.translation, result.job_id, result.settings_used
+    except IntegratedDisplayError as e:
+        # For display errors, show warning but don't fail completely
+        import logging
+        logging.warning(f"Integrated display generation failed: {str(e)}")
+        # Return transcript only
+        return result.transcript, result.translation, result.job_id, result.settings_used
     except TranscriberError as e:
         raise gr.Error(get_user_friendly_message(e))
     except Exception as e:
@@ -467,56 +385,24 @@ def format_transcript_for_display(text: str) -> str:
     return formatted
 
 def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
-    """Create download files (single .txt or .zip with multiple files)."""
-    import tempfile
-    import shutil
+    """Create download files using the new file management system."""
+    from file_manager import create_download_package
+    from util import find_job_directory
     
     if not job_id:
         raise gr.Error("No transcript available for download")
 
-    # Get the absolute path of the project root directory (one level up from src)
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    
-    # Find job directory
-    # This requires searching through date-based folders
-    data_root = os.path.join(project_root, "data")
-    job_dir = None
-    if os.path.exists(data_root):
-        for date_folder in os.listdir(data_root):
-            potential_path = os.path.join(data_root, date_folder, job_id)
-            if os.path.exists(potential_path):
-                job_dir = potential_path
-                break
-
-    if not job_dir:
-        raise gr.Error("Transcript files not found for the given job ID")
-    
-    transcript_path = os.path.join(job_dir, "transcript.txt")
-    
-    if settings.get("translation_enabled", False):
-        # Create ZIP with both files in temp directory
-        temp_zip_path = tempfile.mktemp(suffix=".zip")
+    try:
+        # Find job directory
+        job_dir = find_job_directory(job_id)
+        if not job_dir:
+            raise gr.Error("Transcript files not found for the given job ID")
         
-        with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            if os.path.exists(transcript_path):
-                zipf.write(transcript_path, "transcript.txt")
-            
-            # Find translation file
-            lang_code = settings.get("default_translation_language", "").lower()[:2]
-            if lang_code:
-                translation_path = os.path.join(job_dir, f"transcript.{lang_code}.txt")
-                if os.path.exists(translation_path):
-                    zipf.write(translation_path, f"transcript.{lang_code}.txt")
+        # Use the new file management system
+        return create_download_package(job_dir, job_id)
         
-        return temp_zip_path
-    else:
-        # Copy single transcript file to temp directory
-        if os.path.exists(transcript_path):
-            temp_transcript_path = tempfile.mktemp(suffix=".txt")
-            shutil.copy2(transcript_path, temp_transcript_path)
-            return temp_transcript_path
-        else:
-            return ""
+    except Exception as e:
+        raise gr.Error(f"Failed to create download package: {str(e)}")
 
 def get_job_history() -> List[List[str]]:
     """Get list of previous jobs for history view."""
@@ -557,43 +443,31 @@ def get_job_history() -> List[List[str]]:
     
     return jobs
 
-def load_job_transcript(job_id: str) -> Tuple[str, str]:
-    """Load transcript and translation for a specific job."""
+def load_job_transcript(job_id: str) -> Tuple[str, str, str]:
+    """Load display content, original transcript, and translation for a specific job using new file management."""
+    from file_manager import get_display_content_from_job, load_job_files
+    from util import find_job_directory
+    
     if not job_id:
-        return "", ""
+        return "", "", ""
     
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-    data_dir = os.path.join(project_root, "data")
-
-    if not os.path.exists(data_dir):
-        return "", ""
-    
-    # Find job by ID across all date folders
-    for date_folder in os.listdir(data_dir):
-        date_path = os.path.join(data_dir, date_folder)
-        if not os.path.isdir(date_path):
-            continue
-            
-        job_path = os.path.join(date_path, job_id)
-        if os.path.exists(job_path):
-            transcript_path = os.path.join(job_path, "transcript.txt")
-            transcript = ""
-            if os.path.exists(transcript_path):
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    transcript = f.read()
-            
-            # Look for translation file
-            translation = ""
-            for file in os.listdir(job_path):
-                if file.startswith("transcript.") and file.endswith(".txt") and file != "transcript.txt":
-                    translation_path = os.path.join(job_path, file)
-                    with open(translation_path, 'r', encoding='utf-8') as f:
-                        translation = f.read()
-                    break
-            
-            return transcript, translation
-    
-    return "", ""
+    try:
+        # Find job directory
+        job_dir = find_job_directory(job_id)
+        if not job_dir:
+            return "", "", ""
+        
+        # Get display content (integrated display if available, otherwise transcript)
+        display_content = get_display_content_from_job(job_dir)
+        
+        # Get individual files for reference
+        transcript, translation, _ = load_job_files(job_dir)
+        
+        return display_content, transcript, translation
+        
+    except Exception as e:
+        print(f"Error loading job transcript: {e}")
+        return "", "", ""
 
 def handle_chat_message(
     message: str,
@@ -830,7 +704,7 @@ def create_history_tab(history_handler):
         
         with gr.Group():
             # Create radio button options from job data with vertical layout
-            job_history = history_handler.get_job_history()
+            job_history = history_handler.get_job_history_with_translation_info()
             job_options = []
             for job in job_history:
                 job_id, timestamp, filename, duration, language, status = job
@@ -842,7 +716,7 @@ def create_history_tab(history_handler):
                 else:
                     date_part = "N/A"
                     time_part = "N/A"
-                label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} {status_icon}"
+                label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} • {language} {status_icon}"
                 job_options.append((label, job_id))
             
             job_selector = gr.Radio(
@@ -864,13 +738,15 @@ def create_history_tab(history_handler):
                 refresh_btn = gr.Button("🔄 Refresh", size="sm")
                 delete_btn = gr.Button("🗑️ Delete Selected", size="sm", variant="stop")
                 load_btn = gr.Button("📄 Load Transcript", size="sm", variant="primary")
+                history_download_btn = gr.DownloadButton("📥 Download", size="sm", visible=False)
         
         return {
             "job_selector": job_selector,
             "job_details_display": job_details_display,
             "refresh_btn": refresh_btn,
             "delete_btn": delete_btn,
-            "load_btn": load_btn
+            "load_btn": load_btn,
+            "history_download_btn": history_download_btn
         }
 
 # Create the Gradio interface
@@ -943,6 +819,7 @@ def create_app(env: str = "prod"):
         refresh_btn = history_components["refresh_btn"]
         delete_btn = history_components["delete_btn"]
         load_btn = history_components["load_btn"]
+        history_download_btn = history_components["history_download_btn"]
         
         # Event handlers
         
@@ -1027,12 +904,13 @@ def create_app(env: str = "prod"):
                 job_id = result.job_id
                 settings_used = result.settings_used
                 
-                # Store current transcript for chat
+                # Store current transcript and job_id for chat and download
                 app_state.current_transcript = transcript
+                app_state.current_job_id = job_id
                 
                 # Show download button and update status
                 return (
-                    transcript,
+                    result.display_text,  # Use display_text instead of transcript for integrated display
                     create_status_html(0, 0, "Processing completed successfully!"),
                     gr.update(visible=True)
                 )
@@ -1045,6 +923,140 @@ def create_app(env: str = "prod"):
                     create_status_html(0, 0, f"Processing failed: {error_msg}"),
                     gr.update(visible=False)
                 )
+        
+        # Download button click handler
+        def handle_download():
+            """Handle download button click for current job."""
+            if not app_state.current_job_id:
+                raise gr.Error("No transcript available for download")
+            
+            try:
+                return create_download_files(app_state.current_job_id, {})
+            except Exception as e:
+                raise gr.Error(f"Failed to create download package: {str(e)}")
+        
+        download_btn.click(
+            handle_download,
+            outputs=[download_btn]
+        )
+        
+        # History tab event handlers
+        selected_job_id = gr.State(value=None)
+        
+        def handle_job_selection(job_id):
+            """Handle job selection in history tab."""
+            if not job_id:
+                return (
+                    "<p style='color: #888; text-align: center;'>Select a job above to view details</p>",
+                    gr.update(visible=False),
+                    job_id
+                )
+            
+            try:
+                # Load job details using history handler
+                job_details = history_handler.get_job_details(job_id)
+                
+                # Format job details for display
+                details_html = f"""
+                <div style="padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <h4>Job Details</h4>
+                    <p><strong>Job ID:</strong> {job_details.get('job_id', 'N/A')}</p>
+                    <p><strong>File:</strong> {job_details.get('original_filename', 'N/A')}</p>
+                    <p><strong>Duration:</strong> {job_details.get('file_info', {}).get('duration_seconds', 0):.1f}s</p>
+                    <p><strong>Translation:</strong> {'Enabled' if job_details.get('translation_enabled', False) else 'Disabled'}</p>
+                    <p><strong>Status:</strong> Completed</p>
+                </div>
+                """
+                
+                return (
+                    details_html,
+                    gr.update(visible=True),
+                    job_id
+                )
+                
+            except Exception as e:
+                return (
+                    f"<p style='color: #dc3545;'>Error loading job details: {str(e)}</p>",
+                    gr.update(visible=False),
+                    None
+                )
+        
+        def handle_history_download(job_id):
+            """Handle download for selected history job."""
+            if not job_id:
+                raise gr.Error("No job selected for download")
+            
+            try:
+                return create_download_files(job_id, {})
+            except Exception as e:
+                raise gr.Error(f"Failed to create download package: {str(e)}")
+        
+        def handle_load_transcript(job_id):
+            """Load transcript from history job into main display."""
+            if not job_id:
+                raise gr.Error("No job selected")
+            
+            try:
+                display_content, original_transcript, translation = load_job_transcript(job_id)
+                
+                # Update app state
+                app_state.current_job_id = job_id
+                app_state.current_transcript = original_transcript  # For chat context - use original transcript, not display content
+                
+                return (
+                    display_content,
+                    gr.update(visible=True)  # Show main download button
+                )
+                
+            except Exception as e:
+                raise gr.Error(f"Failed to load transcript: {str(e)}")
+        
+        def refresh_job_history():
+            """Refresh the job history list."""
+            try:
+                job_history = history_handler.get_job_history_with_translation_info()
+                job_options = []
+                for job in job_history:
+                    job_id, timestamp, filename, duration, language, status = job
+                    status_icon = "✅" if status == "Completed" else "❌"
+                    if timestamp:
+                        date_part = timestamp.split()[0] if " " in timestamp else timestamp[:10]
+                        time_part = timestamp.split()[1] if " " in timestamp else timestamp[11:19]
+                    else:
+                        date_part = "N/A"
+                        time_part = "N/A"
+                    label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} • {language} {status_icon}"
+                    job_options.append((label, job_id))
+                
+                return gr.update(choices=job_options, value=None)
+                
+            except Exception as e:
+                gr.Error(f"Failed to refresh job history: {str(e)}")
+                return gr.update()
+        
+        # Connect history tab events
+        job_selector.change(
+            handle_job_selection,
+            inputs=[job_selector],
+            outputs=[job_details_display, history_download_btn, selected_job_id]
+        )
+        
+        history_download_btn.click(
+            handle_history_download,
+            inputs=[selected_job_id],
+            outputs=[history_download_btn]
+        )
+        
+        load_btn.click(
+            handle_load_transcript,
+            inputs=[selected_job_id],
+            outputs=[results_display, download_btn]
+        )
+        
+        refresh_btn.click(
+            refresh_job_history,
+            outputs=[job_selector]
+        )
         
         # Process button click handler
         process_btn.click(

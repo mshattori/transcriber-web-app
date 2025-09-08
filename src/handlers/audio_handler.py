@@ -14,6 +14,8 @@ from transcribe import transcribe_chunked
 from llm import translate_transcript_full
 from util import validate_audio_file, estimate_processing_time, create_job_directory
 from errors import ValidationError, get_user_friendly_message, safe_execute
+from file_manager import save_transcription_files, save_job_metadata
+from integrated_display import get_display_content_for_ui
 
 
 class ProcessingResult(NamedTuple):
@@ -22,6 +24,7 @@ class ProcessingResult(NamedTuple):
     translation: str
     job_id: str
     settings_used: Dict[str, Any]
+    display_text: str  # 新規追加: UI表示用テキスト
 
 
 class AudioHandler:
@@ -31,6 +34,31 @@ class AudioHandler:
         self.current_job_id: Optional[str] = None
         self.current_transcript: Optional[str] = None
         self.current_translation: Optional[str] = None
+    
+    def get_display_content(self) -> Tuple[str, str, bool]:
+        """
+        表示用コンテンツの取得
+        
+        Returns:
+            Tuple of (transcript, translation, translation_available)
+        """
+        return (
+            self.current_transcript or "",
+            self.current_translation or "",
+            bool(self.current_translation)
+        )
+    
+    def get_ui_display_text(self) -> str:
+        """
+        UI表示用テキストの取得
+        
+        Returns:
+            統合表示形式のテキスト
+        """
+        return get_display_content_for_ui(
+            self.current_transcript or "",
+            self.current_translation or ""
+        )
     
     def validate_audio(self, file_path: str) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """
@@ -134,73 +162,104 @@ class AudioHandler:
         transcript_text = transcript_result.text
         self.current_transcript = transcript_text
         
-        # Save original transcript
-        def _save_transcript():
-            transcript_path = os.path.join(job_dir, "transcript.txt")
-            with open(transcript_path, 'w', encoding='utf-8') as f:
-                f.write(transcript_text)
-            return transcript_path
-        
-        safe_execute(_save_transcript, error_context="saving transcript")
-        
         translation_text = ""
         
         # Translation if enabled
+        translation_error = None
         if settings.get("translation_enabled", False):
             if progress_callback:
                 progress_callback(0.7, "Starting translation...")
             
-            translation_result = await translate_transcript_full(
-                api_key=settings["api_key"],
-                model=settings["language_model"],
-                transcript_text=transcript_text,
-                target_language=settings["default_translation_language"],
-                temperature=0.3,
-                progress_callback=lambda p, m: progress_callback(0.7 + p * 0.25, m) if progress_callback else None
+            try:
+                translation_result = await translate_transcript_full(
+                    api_key=settings["api_key"],
+                    model=settings["language_model"],
+                    transcript_text=transcript_text,
+                    target_language=settings["default_translation_language"],
+                    temperature=0.3,
+                    progress_callback=lambda p, m: progress_callback(0.7 + p * 0.25, m) if progress_callback else None
+                )
+                
+                translation_text = translation_result.translated_text
+                self.current_translation = translation_text
+                
+            except Exception as e:
+                # Handle translation failure gracefully
+                from errors import handle_translation_failure
+                transcript_text, translation_text, translation_error = handle_translation_failure(
+                    transcript_text, e
+                )
+                self.current_translation = translation_text
+                
+                if progress_callback:
+                    progress_callback(0.95, "Translation failed, but transcription completed successfully")
+        
+        # Save all file formats (transcript, translation, integrated)
+        def _save_all_files():
+            saved_files = save_transcription_files(
+                job_dir, 
+                transcript_text, 
+                translation_text, 
+                settings
             )
-            
-            translation_text = translation_result.translated_text
-            self.current_translation = translation_text
-            
-            # Save translation
-            def _save_translation():
-                lang_code = settings["default_translation_language"].lower()[:2]
-                translation_path = os.path.join(job_dir, f"transcript.{lang_code}.txt")
-                with open(translation_path, 'w', encoding='utf-8') as f:
-                    f.write(translation_text)
-            
-            safe_execute(_save_translation, error_context="saving translation")
+            return saved_files
+        
+        saved_files = safe_execute(_save_all_files, error_context="saving transcription files")
         
         # Save job metadata
         def _save_metadata():
-            job_metadata = {
-                "job_id": job_id,
-                "timestamp": datetime.now().isoformat(),
-                "original_filename": os.path.basename(audio_file),
-                "file_info": file_info,
-                "settings": settings,
-                "transcript_stats": {
-                    "word_count": transcript_result.word_count,
-                    "duration": transcript_result.total_duration,
-                    "processing_time": transcript_result.processing_time
-                },
-                "translation_enabled": settings.get("translation_enabled", False)
+            transcript_stats = {
+                "word_count": transcript_result.word_count,
+                "duration": transcript_result.total_duration,
+                "processing_time": transcript_result.processing_time
             }
             
-            metadata_path = os.path.join(job_dir, "metadata.json")
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(job_metadata, f, indent=2, ensure_ascii=False)
+            return save_job_metadata(
+                job_dir,
+                job_id,
+                os.path.basename(audio_file),
+                file_info,
+                settings,
+                transcript_stats,
+                saved_files
+            )
         
         safe_execute(_save_metadata, error_context="saving job metadata")
         
+        # Generate display text for UI with error handling
+        display_text = transcript_text  # Default fallback
+        try:
+            import logging
+            logging.info(f"Generating UI display text - transcript length: {len(transcript_text)}, translation length: {len(translation_text)}")
+            
+            display_text = get_display_content_for_ui(transcript_text, translation_text)
+            
+            logging.info(f"Generated UI display text - length: {len(display_text)}")
+            if len(display_text) < 200:  # Log short content for debugging
+                logging.info(f"UI display text content: {repr(display_text[:200])}")
+                
+        except Exception as e:
+            # Handle integrated display generation failure
+            from errors import handle_integrated_display_failure
+            display_text, display_error = handle_integrated_display_failure(
+                transcript_text, translation_text, e
+            )
+            # Log the error but don't fail the entire process
+            import logging
+            logging.error(f"Integrated display generation failed: {str(e)}", exc_info=True)
+        
         if progress_callback:
-            progress_callback(1.0, "Processing completed!")
+            if translation_error:
+                progress_callback(1.0, "Transcription completed! Translation failed - see results for details.")
+            else:
+                progress_callback(1.0, "Processing completed!")
         
         return ProcessingResult(
             transcript=transcript_text,
             translation=translation_text,
             job_id=job_id,
-            settings_used=settings
+            settings_used=settings,
+            display_text=display_text
         )
 
 
@@ -209,8 +268,33 @@ class MockAudioHandler:
     
     def __init__(self):
         self.current_job_id: Optional[str] = "mock-job-123"
-        self.current_transcript: Optional[str] = "Mock transcript content"
-        self.current_translation: Optional[str] = "Mock translation content"
+        self.current_transcript: Optional[str] = "# 00:00:00 --> 00:02:30\nMock transcript content"
+        self.current_translation: Optional[str] = "# 00:00:00 --> 00:02:30\nMock translation content"
+    
+    def get_display_content(self) -> Tuple[str, str, bool]:
+        """
+        表示用コンテンツの取得（モック）
+        
+        Returns:
+            Tuple of (transcript, translation, translation_available)
+        """
+        return (
+            self.current_transcript or "",
+            self.current_translation or "",
+            bool(self.current_translation)
+        )
+    
+    def get_ui_display_text(self) -> str:
+        """
+        UI表示用テキストの取得（モック）
+        
+        Returns:
+            統合表示形式のテキスト
+        """
+        return get_display_content_for_ui(
+            self.current_transcript or "",
+            self.current_translation or ""
+        )
     
     def validate_audio(self, file_path: str) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Mock audio validation - always returns valid."""
@@ -242,8 +326,15 @@ class MockAudioHandler:
         settings: Dict[str, Any],
         progress_callback=None
     ) -> ProcessingResult:
-        """Mock audio processing - returns instant results."""
+        """Mock audio processing - returns instant results and creates mock files."""
         import asyncio
+        import uuid
+        from datetime import datetime
+        from file_manager import save_transcription_files, save_job_metadata
+        from util import create_job_directory
+        
+        # Generate unique job ID
+        job_id = f"mock-{uuid.uuid4().hex[:8]}"
         
         # Simulate progress updates
         if progress_callback:
@@ -280,9 +371,51 @@ to simulate real transcription output for testing purposes.
 タイムスタンプフォーマットと複数のセグメントが含まれています。
 """
         
+        # Create job directory and save files
+        job_dir = create_job_directory(job_id)
+        
+        # Save transcription files (3 formats)
+        saved_files = save_transcription_files(
+            job_dir,
+            mock_transcript,
+            mock_translation,
+            settings
+        )
+        
+        # Save metadata
+        file_info = {
+            'size_mb': 2.5,
+            'duration_seconds': 150.0,
+            'format': 'mp3',
+            'sample_rate': 44100
+        }
+        
+        transcript_stats = {
+            'total_chunks': 2,
+            'total_duration': 150.0,
+            'processing_time': 1.0
+        }
+        
+        save_job_metadata(
+            job_dir,
+            job_id,
+            os.path.basename(audio_file),
+            file_info,
+            settings,
+            transcript_stats,
+            saved_files
+        )
+        
+        # Generate display text for UI
+        display_text = get_display_content_for_ui(mock_transcript, mock_translation)
+        
+        # Update current job ID for download functionality
+        self.current_job_id = job_id
+        
         return ProcessingResult(
             transcript=mock_transcript,
             translation=mock_translation,
-            job_id=self.current_job_id,
-            settings_used=settings
+            job_id=job_id,
+            settings_used=settings,
+            display_text=display_text
         )
