@@ -35,6 +35,36 @@ A production-ready web application for transcribing large audio files using Open
 
 ### Installation
 
+#### Option 1: Using uv (Recommended)
+
+1. **Install uv** (if not already installed)
+   ```bash
+   # macOS/Linux
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+   
+   # Or using Homebrew
+   brew install uv
+   
+   # Or using pip
+   pip install uv
+   ```
+
+2. **Clone and setup the project**
+   ```bash
+   git clone <repository-url>
+   cd transcriber-web-app
+   
+   # Create virtual environment and install dependencies
+   uv sync
+   ```
+
+3. **Configure the application**
+   - Copy `sample.env` to `.env` and add your OpenAI API key
+   - The application uses `src/config.yaml` for default settings
+   - You can also add API key through the web interface settings modal
+
+#### Option 2: Using pip (Traditional)
+
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
@@ -58,6 +88,21 @@ A production-ready web application for transcribing large audio files using Open
    - You can also add API key through the web interface settings modal
 
 ### Running the Application
+
+#### Using uv (Recommended)
+
+```bash
+# Production mode (default)
+uv run python src/app.py
+
+# Mock UI mode (for UI testing without API calls)
+APP_ENV=mock-ui uv run python src/app.py
+
+# Test mode (real APIs with test configuration)
+APP_ENV=test uv run python src/app.py
+```
+
+#### Using traditional pip/venv
 
 ```bash
 # Activate virtual environment and start the application
@@ -280,6 +325,33 @@ This allows secure credential management while maintaining default settings in v
 2. **Environment**: Copy `sample.env` to `.env` and add your OpenAI API key for integration tests
 3. **Mock tests**: UI-only tests use mock handlers and don't require API keys
 
+#### Using uv (Recommended)
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
+# Run unit tests with mock handlers (no API required)
+APP_ENV=mock-ui uv run pytest tests/unit/ -v
+
+# Run integration tests with real APIs (requires API key)
+APP_ENV=test uv run pytest tests/integration/ -v
+
+# Run UI tests with mocks
+APP_ENV=mock-ui uv run pytest tests/ui/ -v
+
+# Run specific test file
+uv run pytest tests/test_util.py -v
+
+# Run with coverage
+uv run pytest tests/ --cov=src --cov-report=html
+
+# Test the redesigned UI specifically
+APP_ENV=mock-ui uv run python src/app.py  # Start with mock data for UI testing
+```
+
+#### Using traditional pip/venv
+
 ```bash
 # Activate virtual environment
 source venv/bin/activate
@@ -318,6 +390,22 @@ APP_ENV=mock-ui python src/app.py  # Start with mock data for UI testing
 
 ### Code Quality
 
+#### Using uv (Recommended)
+
+```bash
+# Linting and formatting
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+
+# Type checking
+uv run mypy src/
+
+# All quality checks
+uv run ruff check src/ && uv run mypy src/
+```
+
+#### Using traditional pip/venv
+
 ```bash
 # Linting and formatting
 ruff check src/ tests/
@@ -333,6 +421,29 @@ ruff check src/ && mypy src/
 ### CLI Interfaces
 
 Each module provides a CLI interface for testing:
+
+#### Using uv (Recommended)
+
+```bash
+# Test transcription with test audio
+uv run python src/transcribe.py tests/data/test_audio.mp3 --model whisper-1
+
+# Test translation
+uv run python src/llm.py --help
+
+# Test configuration loading
+uv run python -c "import sys; sys.path.append('src'); from config import AppConfig; print(AppConfig().get_all())"
+
+# Test handlers directly
+uv run python -c "
+import sys; sys.path.append('src');
+from handlers import MockAudioHandler;
+handler = MockAudioHandler();
+print('Mock handler ready for testing')
+"
+```
+
+#### Using traditional pip/venv
 
 ```bash
 # Test transcription with test audio
