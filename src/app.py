@@ -5,18 +5,12 @@ Implements the exact UI layout and functionality specified in INITIAL.md.
 Supports environment-based configuration for production, testing, and mock UI modes.
 """
 
-import os
 import json
-import uuid
-import zipfile
-import time
-import tempfile
 import logging
-from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple
+import os
+from typing import Any
 
 import gradio as gr
-from gradio import BrowserState
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -29,26 +23,22 @@ logging.basicConfig(
 )
 
 # Handler imports for separation of UI and business logic
-from handlers import (
-    AudioHandler, MockAudioHandler,
-    ChatHandler, MockChatHandler,
-    HistoryHandler, MockHistoryHandler,
-    SettingsHandler, MockSettingsHandler
+from .config import AppConfig
+from .handlers import (
+    AudioHandler,
+    ChatHandler,
+    HistoryHandler,
+    MockAudioHandler,
+    MockChatHandler,
+    MockHistoryHandler,
+    MockSettingsHandler,
+    SettingsHandler,
 )
-from config import AppConfig
+from .llm import chat_completion, chat_with_context
 
 # Legacy imports for backward compatibility (will be removed gradually)
-from transcribe import transcribe_chunked
-from llm import (
-    translate_transcript_full, 
-    chat_with_context, 
-    chat_completion
-)
-from util import (
-    load_config, 
-    validate_audio_file, 
-    estimate_processing_time,
-    create_job_directory
+from .util import (
+    load_config,
 )
 
 # Custom CSS for modern redesigned UI
@@ -173,10 +163,10 @@ CUSTOM_CSS = """
 # Global state management
 class AppState:
     def __init__(self):
-        self.current_job_id: Optional[str] = None
-        self.current_transcript: Optional[str] = None
-        self.current_translation: Optional[str] = None
-        self.chat_history: List[Dict[str, str]] = []
+        self.current_job_id: str | None = None
+        self.current_transcript: str | None = None
+        self.current_translation: str | None = None
+        self.chat_history: list[dict[str, str]] = []
         self.processing_progress: float = 0.0
         self.processing_message: str = ""
 
@@ -193,10 +183,10 @@ def create_status_html(current_chunk: int, total_chunks: int, message: str) -> s
             <div class="status-message">Ready to process audio file</div>
         </div>
         """
-    
+
     progress_pct = (current_chunk / total_chunks) * 100
     dots = "●" * current_chunk + "○" * (total_chunks - current_chunk)
-    
+
     return f"""
     <div class="status-container">
         <div class="progress-dots">{dots}</div>
@@ -207,7 +197,7 @@ def create_status_html(current_chunk: int, total_chunks: int, message: str) -> s
     </div>
     """
 
-def load_default_settings() -> Dict[str, Any]:
+def load_default_settings() -> dict[str, Any]:
     """Load default settings from config.yaml."""
     try:
         config = load_config()
@@ -229,7 +219,7 @@ def load_default_settings() -> Dict[str, Any]:
         return {
             "api_key": api_key,
             "audio_model": "whisper-1",
-            "language_model": "gpt-4o-mini", 
+            "language_model": "gpt-4o-mini",
             "system_message": "あなたはプロフェッショナルで親切な文字起こしアシスタントです。",
             "default_language": "auto",
             "default_translation_language": "Japanese",
@@ -237,36 +227,36 @@ def load_default_settings() -> Dict[str, Any]:
             "translation_enabled": False
         }
 
-def ensure_settings_structure(browser_state_value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def ensure_settings_structure(browser_state_value: dict[str, Any] | None) -> dict[str, Any]:
     """Ensure browser state has proper settings structure with defaults."""
     if not isinstance(browser_state_value, dict):
         print("No settings found in browser state, using defaults.")
         return load_default_settings()
-    
+
     # Fill in any missing keys with defaults
     defaults = load_default_settings()
     for key, default_value in defaults.items():
         if key not in browser_state_value:
             browser_state_value[key] = default_value
-    
+
     return browser_state_value
 
-def validate_settings(settings: Dict[str, Any]) -> Tuple[bool, str]:
+def validate_settings(settings: dict[str, Any]) -> tuple[bool, str]:
     """Validate user settings."""
-    from errors import validate_api_key, ValidationError, get_user_friendly_message
-    
+    from errors import ValidationError, get_user_friendly_message, validate_api_key
+
     try:
         # Validate API key
         api_key = settings.get("api_key", "").strip()
         validate_api_key(api_key)
-        
+
         # Validate model selections
         if not settings.get("audio_model", "").strip():
             raise ValidationError("Audio model selection is required", field="audio_model")
-            
+
         if not settings.get("language_model", "").strip():
             raise ValidationError("Language model selection is required", field="language_model")
-        
+
         # Validate chunk duration
         chunk_minutes = settings.get("chunk_minutes", 5)
         if not isinstance(chunk_minutes, (int, float)) or chunk_minutes < 1 or chunk_minutes > 10:
@@ -275,9 +265,9 @@ def validate_settings(settings: Dict[str, Any]) -> Tuple[bool, str]:
                 field="chunk_minutes",
                 value=chunk_minutes
             )
-        
+
         return True, ""
-        
+
     except ValidationError as e:
         return False, get_user_friendly_message(e)
 
@@ -288,10 +278,10 @@ def progress_callback(progress: float, message: str):
 
 async def process_audio_file(
     audio_file: str,
-    browser_state_value: Dict[str, Any],
-    ui_settings: Dict[str, Any],
+    browser_state_value: dict[str, Any],
+    ui_settings: dict[str, Any],
     progress: gr.Progress = None
-) -> Tuple[str, str, str, Dict[str, Any]]:
+) -> tuple[str, str, str, dict[str, Any]]:
     """
     Process audio file with transcription and optional translation using AudioHandler.
     
@@ -301,41 +291,45 @@ async def process_audio_file(
     # Load persistent settings and merge UI settings
     settings = load_settings_from_browser_state(browser_state_value)
     settings.update(ui_settings)
-    
+
     from errors import (
-        TranscriberError, ValidationError, APIError, FileError, 
-        TranslationError, IntegratedDisplayError,
-        get_user_friendly_message
+        APIError,
+        FileError,
+        IntegratedDisplayError,
+        TranscriberError,
+        TranslationError,
+        ValidationError,
+        get_user_friendly_message,
     )
-    
+
     try:
         print(f"[DEBUG] Received audio file: {audio_file}")
-        
+
         # Get the appropriate audio handler based on environment
         config = AppConfig()
         if config.env == "mock-ui":
             audio_handler = MockAudioHandler()
         else:
             audio_handler = AudioHandler()
-        
+
         # Process audio using the handler
         result = await audio_handler.process_audio(
             audio_file,
             settings,
             progress_callback=lambda p, m: progress(p, m) if progress else None
         )
-        
+
         # Update app state
         app_state.current_job_id = result.job_id
         app_state.current_transcript = result.transcript
         app_state.current_translation = result.translation
-        
+
         if progress:
             progress(1.0, "Processing completed!")
-        
+
         # Return display_text instead of transcript for UI
         return result.display_text, result.translation, result.job_id, result.settings_used
-        
+
     except ValidationError as e:
         raise gr.Error(get_user_friendly_message(e))
     except APIError as e:
@@ -366,29 +360,29 @@ def format_transcript_for_display(text: str) -> str:
     """Format transcript for HTML display with timestamp styling."""
     if not text:
         return ""
-    
+
     # Convert markdown timestamps to HTML with CSS classes
     import re
-    
+
     # Pattern for # HH:MM:SS --> HH:MM:SS
     pattern = r'# (\d{2}:\d{2}:\d{2} --> \d{2}:\d{2}:\d{2})'
-    
+
     def replace_timestamp(match):
         timestamp = match.group(1)
         return f'<span class="timestamp"># {timestamp}</span>'
-    
+
     formatted = re.sub(pattern, replace_timestamp, text)
-    
+
     # Convert newlines to HTML breaks for proper display
     formatted = formatted.replace('\n', '<br>')
-    
+
     return formatted
 
-def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
+def create_download_files(job_id: str, settings: dict[str, Any]) -> str:
     """Create download files using the new file management system."""
     from file_manager import create_download_package
     from util import find_job_directory
-    
+
     if not job_id:
         raise gr.Error("No transcript available for download")
 
@@ -397,37 +391,37 @@ def create_download_files(job_id: str, settings: Dict[str, Any]) -> str:
         job_dir = find_job_directory(job_id)
         if not job_dir:
             raise gr.Error("Transcript files not found for the given job ID")
-        
+
         # Use the new file management system
         return create_download_package(job_dir, job_id)
-        
+
     except Exception as e:
         raise gr.Error(f"Failed to create download package: {str(e)}")
 
-def get_job_history() -> List[List[str]]:
+def get_job_history() -> list[list[str]]:
     """Get list of previous jobs for history view."""
     jobs = []
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
     data_dir = os.path.join(project_root, "data")
-    
+
     if not os.path.exists(data_dir):
         return []
-    
+
     try:
         for date_folder in sorted(os.listdir(data_dir), reverse=True):
             date_path = os.path.join(data_dir, date_folder)
             if not os.path.isdir(date_path):
                 continue
-                
+
             for job_folder in os.listdir(date_path):
                 job_path = os.path.join(date_path, job_folder)
                 metadata_path = os.path.join(job_path, "metadata.json")
-                
+
                 if os.path.exists(metadata_path):
                     try:
-                        with open(metadata_path, 'r', encoding='utf-8') as f:
+                        with open(metadata_path, encoding='utf-8') as f:
                             metadata = json.load(f)
-                        
+
                         jobs.append([
                             metadata.get("job_id", job_folder),
                             metadata.get("timestamp", ""),
@@ -440,52 +434,52 @@ def get_job_history() -> List[List[str]]:
                         continue
     except OSError:
         pass
-    
+
     return jobs
 
-def load_job_transcript(job_id: str) -> Tuple[str, str, str]:
+def load_job_transcript(job_id: str) -> tuple[str, str, str]:
     """Load display content, original transcript, and translation for a specific job using new file management."""
     from file_manager import get_display_content_from_job, load_job_files
     from util import find_job_directory
-    
+
     if not job_id:
         return "", "", ""
-    
+
     try:
         # Find job directory
         job_dir = find_job_directory(job_id)
         if not job_dir:
             return "", "", ""
-        
+
         # Get display content (integrated display if available, otherwise transcript)
         display_content = get_display_content_from_job(job_dir)
-        
+
         # Get individual files for reference
         transcript, translation, _ = load_job_files(job_dir)
-        
+
         return display_content, transcript, translation
-        
+
     except Exception as e:
         print(f"Error loading job transcript: {e}")
         return "", "", ""
 
 def handle_chat_message(
     message: str,
-    history: List[Dict[str, str]],
-    settings: Dict[str, Any]
-) -> Tuple[List[Dict[str, str]], str]:
+    history: list[dict[str, str]],
+    settings: dict[str, Any]
+) -> tuple[list[dict[str, str]], str]:
     """Handle chat message with context injection."""
     if not message.strip():
         return history, ""
-    
+
     if not settings.get("api_key"):
         gr.Warning("Please set your OpenAI API key in settings")
         return history, ""
-    
+
     try:
         # Use transcript as context if available
         context_text = app_state.current_transcript or ""
-        
+
         if context_text:
             response = chat_with_context(
                 api_key=settings["api_key"],
@@ -503,19 +497,19 @@ def handle_chat_message(
                 system_message=settings.get("system_message", ""),
                 temperature=0.7
             )
-        
+
         # Update history in Gradio messages format
         new_history = history.copy() if history else []
         new_history.append({"role": "user", "content": message})
         new_history.append({"role": "assistant", "content": response})
-        
+
         return new_history, ""
-        
+
     except Exception as e:
         gr.Error(f"Chat error: {str(e)}")
         return history, ""
 
-def clear_chat_history() -> List[Dict[str, str]]:
+def clear_chat_history() -> list[dict[str, str]]:
     """Clear chat history."""
     app_state.chat_history = []
     return []
@@ -524,7 +518,7 @@ def toggle_translation_target(enabled):
     """Toggle translation target dropdown visibility."""
     return gr.update(visible=enabled)
 
-def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, settings_handler, env: str):
+def create_main_tab(config: dict[str, Any], audio_handler, chat_handler, settings_handler, env: str):
     """Create the main tab with audio processing interface."""
     with gr.TabItem("Main", elem_classes=["tab-content"]):
         # Row 1: Configuration Panel
@@ -552,7 +546,7 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
                     scale=1,
                     interactive=True
                 )
-            
+
             with gr.Row():
                 translation_enabled = gr.Checkbox(
                     label="Enable Translation",
@@ -567,7 +561,7 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
                     scale=2,
                     interactive=True
                 )
-        
+
         # Row 2: File Upload
         with gr.Group():
             audio_input = gr.File(
@@ -575,7 +569,7 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
                 file_types=["audio"],
                 elem_classes=["upload-area"]
             )
-        
+
         # Row 3: Processing Control
         with gr.Row():
             process_btn = gr.Button(
@@ -584,13 +578,13 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
                 size="lg",
                 scale=1
             )
-        
+
         # Row 4: Status Indicator (separate from results)
         with gr.Group():
             status_display = gr.HTML(
                 value=create_status_html(0, 0, "Ready to process audio file")
             )
-        
+
         # Row 5: Results Display
         with gr.Group(elem_classes=["results-container"]):
             gr.Markdown("### Transcription Results")
@@ -601,14 +595,14 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
                 show_copy_button=True,
                 container=False
             )
-            
+
             with gr.Row():
                 download_btn = gr.DownloadButton(
                     "📥 Download Results",
                     size="sm",
                     visible=False
                 )
-        
+
         # Chat Interface
         with gr.Group(elem_classes=["chat-container"]):
             gr.Markdown("### Chat with Transcript")
@@ -626,7 +620,7 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
                     )
                     chat_send_btn = gr.Button("Send", scale=1)
                     chat_clear_btn = gr.Button("Clear", scale=1)
-        
+
         return {
             "audio_input": audio_input,
             "audio_model": audio_model,
@@ -644,11 +638,11 @@ def create_main_tab(config: Dict[str, Any], audio_handler, chat_handler, setting
             "chat_clear_btn": chat_clear_btn
         }
 
-def create_settings_tab(config: Dict[str, Any], settings_handler):
+def create_settings_tab(config: dict[str, Any], settings_handler):
     """Create the settings tab."""
     with gr.TabItem("Settings", elem_classes=["tab-content"]):
         gr.Markdown("### API Configuration")
-        
+
         with gr.Group():
             api_key_input = gr.Textbox(
                 label="OpenAI API Key",
@@ -656,7 +650,7 @@ def create_settings_tab(config: Dict[str, Any], settings_handler):
                 placeholder="sk-...",
                 info="Your OpenAI API key for transcription and chat services"
             )
-            
+
             with gr.Row():
                 settings_audio_model = gr.Dropdown(
                     choices=config["audio_models"],
@@ -670,14 +664,14 @@ def create_settings_tab(config: Dict[str, Any], settings_handler):
                     label="Default Language Model",
                     interactive=True
                 )
-            
+
             system_message_input = gr.Textbox(
                 label="System Message",
                 value=config.get("system_message", "You are a helpful transcription assistant."),
                 lines=3,
                 info="Customize the AI assistant's behavior"
             )
-        
+
         # Settings controls
         with gr.Row():
             save_settings_btn = gr.Button(
@@ -687,7 +681,7 @@ def create_settings_tab(config: Dict[str, Any], settings_handler):
             reset_settings_btn = gr.Button(
                 "🔄 Reset to Default"
             )
-        
+
         return {
             "api_key_input": api_key_input,
             "settings_audio_model": settings_audio_model,
@@ -701,7 +695,7 @@ def create_history_tab(history_handler):
     """Create the history tab with job management using Radio buttons."""
     with gr.TabItem("History", elem_classes=["tab-content"]):
         gr.Markdown("### Job History")
-        
+
         with gr.Group():
             # Create radio button options from job data with vertical layout
             job_history = history_handler.get_job_history_with_translation_info()
@@ -718,14 +712,14 @@ def create_history_tab(history_handler):
                     time_part = "N/A"
                 label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} • {language} {status_icon}"
                 job_options.append((label, job_id))
-            
+
             job_selector = gr.Radio(
                 choices=job_options,
                 label="Select Job",
                 value=None,
                 elem_classes=["job-selector"]
             )
-            
+
             # Job details display
             with gr.Group():
                 gr.Markdown("### Selected Job Details")
@@ -733,13 +727,13 @@ def create_history_tab(history_handler):
                     value="<p style='color: #888; text-align: center;'>Select a job above to view details</p>",
                     elem_classes=["job-details"]
                 )
-            
+
             with gr.Row():
                 refresh_btn = gr.Button("🔄 Refresh", size="sm")
                 delete_btn = gr.Button("🗑️ Delete Selected", size="sm", variant="stop")
                 load_btn = gr.Button("📄 Load Transcript", size="sm", variant="primary")
                 history_download_btn = gr.DownloadButton("📥 Download", size="sm", visible=False)
-        
+
         return {
             "job_selector": job_selector,
             "job_details_display": job_details_display,
@@ -763,7 +757,7 @@ def create_app(env: str = "prod"):
     # Initialize configuration
     app_config = AppConfig(env)
     config = app_config.get_all()
-    
+
     # Initialize handlers based on environment
     if env == "mock-ui":
         # Use mock handlers for UI testing
@@ -777,20 +771,20 @@ def create_app(env: str = "prod"):
         chat_handler = ChatHandler()
         history_handler = HistoryHandler()
         settings_handler = SettingsHandler()
-    
+
     with gr.Blocks(css=CUSTOM_CSS, title="Audio Transcription App") as app:
         # Browser state for settings persistence
         browser_state = gr.BrowserState(
             load_default_settings(),
             storage_key="transcriber_app_settings"
         )
-        
+
         # Main tab navigation
         with gr.Tabs():
             main_components = create_main_tab(config, audio_handler, chat_handler, settings_handler, env)
             settings_components = create_settings_tab(config, settings_handler)
             history_components = create_history_tab(history_handler)
-        
+
         # Extract components for event handling
         audio_input = main_components["audio_input"]
         audio_model = main_components["audio_model"]
@@ -806,38 +800,38 @@ def create_app(env: str = "prod"):
         chat_input = main_components["chat_input"]
         chat_send_btn = main_components["chat_send_btn"]
         chat_clear_btn = main_components["chat_clear_btn"]
-        
+
         api_key_input = settings_components["api_key_input"]
         settings_audio_model = settings_components["settings_audio_model"]
         settings_language_model = settings_components["settings_language_model"]
         system_message_input = settings_components["system_message_input"]
         save_settings_btn = settings_components["save_settings_btn"]
         reset_settings_btn = settings_components["reset_settings_btn"]
-        
+
         job_selector = history_components["job_selector"]
         job_details_display = history_components["job_details_display"]
         refresh_btn = history_components["refresh_btn"]
         delete_btn = history_components["delete_btn"]
         load_btn = history_components["load_btn"]
         history_download_btn = history_components["history_download_btn"]
-        
+
         # Event handlers
-        
+
         # Show/hide translation controls
         translation_enabled.change(
             toggle_translation_target,
             inputs=[translation_enabled],
             outputs=[translation_target]
         )
-        
+
         # This section was already replaced with the new process_audio function above
-        
+
         # Settings functions
-        
+
         def save_settings(api_key, audio_model, language_model, system_message, browser_state_value):
             # Ensure proper structure and merge with existing settings
             current_settings = ensure_settings_structure(browser_state_value)
-            
+
             # Update with new settings
             current_settings.update({
                 "api_key": api_key,
@@ -845,10 +839,10 @@ def create_app(env: str = "prod"):
                 "language_model": language_model,
                 "system_message": system_message
             })
-            
+
             gr.Info("Settings saved successfully!")
             return current_settings
-        
+
         def reset_settings():
             default_settings = load_default_settings()
             return (
@@ -857,11 +851,11 @@ def create_app(env: str = "prod"):
                 default_settings.get("language_model", ""),
                 default_settings.get("system_message", "")
             )
-        
+
         # Processing functions for audio
         async def process_audio_wrapper(
-            audio_file, 
-            browser_state_value, 
+            audio_file,
+            browser_state_value,
             audio_model_val,
             language_select_val,
             chunk_duration_val,
@@ -871,16 +865,16 @@ def create_app(env: str = "prod"):
             """Process audio file with new UI structure."""
             # Load settings from browser state
             base_settings = ensure_settings_structure(browser_state_value)
-            
+
             # Convert chunk duration from dropdown to minutes
             chunk_minutes = int(chunk_duration_val.split()[0])
-            
+
             # Convert language name to language code if not "auto"
             language_code = language_select_val
             if language_select_val != "auto":
                 from llm import get_language_code
                 language_code = get_language_code(language_select_val)
-            
+
             ui_settings = {
                 "audio_model": audio_model_val,
                 "default_language": language_code,
@@ -888,33 +882,33 @@ def create_app(env: str = "prod"):
                 "translation_enabled": translation_enabled_val,
                 "default_translation_language": translation_target_val if translation_enabled_val else ""
             }
-            
+
             # Merge settings using handler
             settings = settings_handler.merge_settings(base_settings, ui_settings)
-            
+
             # Use audio handler for processing
             try:
                 result = await audio_handler.process_audio(
-                    audio_file, 
+                    audio_file,
                     settings
                 )
-                
+
                 transcript = result.transcript
                 translation = result.translation
                 job_id = result.job_id
                 settings_used = result.settings_used
-                
+
                 # Store current transcript and job_id for chat and download
                 app_state.current_transcript = transcript
                 app_state.current_job_id = job_id
-                
+
                 # Show download button and update status
                 return (
                     result.display_text,  # Use display_text instead of transcript for integrated display
                     create_status_html(0, 0, "Processing completed successfully!"),
                     gr.update(visible=True)
                 )
-                
+
             except Exception as e:
                 from errors import get_user_friendly_message
                 error_msg = get_user_friendly_message(e) if hasattr(e, '__class__') else str(e)
@@ -923,26 +917,26 @@ def create_app(env: str = "prod"):
                     create_status_html(0, 0, f"Processing failed: {error_msg}"),
                     gr.update(visible=False)
                 )
-        
+
         # Download button click handler
         def handle_download():
             """Handle download button click for current job."""
             if not app_state.current_job_id:
                 raise gr.Error("No transcript available for download")
-            
+
             try:
                 return create_download_files(app_state.current_job_id, {})
             except Exception as e:
                 raise gr.Error(f"Failed to create download package: {str(e)}")
-        
+
         download_btn.click(
             handle_download,
             outputs=[download_btn]
         )
-        
+
         # History tab event handlers
         selected_job_id = gr.State(value=None)
-        
+
         def handle_job_selection(job_id):
             """Handle job selection in history tab."""
             if not job_id:
@@ -951,11 +945,11 @@ def create_app(env: str = "prod"):
                     gr.update(visible=False),
                     job_id
                 )
-            
+
             try:
                 # Load job details using history handler
                 job_details = history_handler.get_job_details(job_id)
-                
+
                 # Format job details for display
                 details_html = f"""
                 <div style="padding: 15px; background: #f8f9fa; border-radius: 8px;">
@@ -967,50 +961,50 @@ def create_app(env: str = "prod"):
                     <p><strong>Status:</strong> Completed</p>
                 </div>
                 """
-                
+
                 return (
                     details_html,
                     gr.update(visible=True),
                     job_id
                 )
-                
+
             except Exception as e:
                 return (
                     f"<p style='color: #dc3545;'>Error loading job details: {str(e)}</p>",
                     gr.update(visible=False),
                     None
                 )
-        
+
         def handle_history_download(job_id):
             """Handle download for selected history job."""
             if not job_id:
                 raise gr.Error("No job selected for download")
-            
+
             try:
                 return create_download_files(job_id, {})
             except Exception as e:
                 raise gr.Error(f"Failed to create download package: {str(e)}")
-        
+
         def handle_load_transcript(job_id):
             """Load transcript from history job into main display."""
             if not job_id:
                 raise gr.Error("No job selected")
-            
+
             try:
                 display_content, original_transcript, translation = load_job_transcript(job_id)
-                
+
                 # Update app state
                 app_state.current_job_id = job_id
                 app_state.current_transcript = original_transcript  # For chat context - use original transcript, not display content
-                
+
                 return (
                     display_content,
                     gr.update(visible=True)  # Show main download button
                 )
-                
+
             except Exception as e:
                 raise gr.Error(f"Failed to load transcript: {str(e)}")
-        
+
         def refresh_job_history():
             """Refresh the job history list."""
             try:
@@ -1027,37 +1021,37 @@ def create_app(env: str = "prod"):
                         time_part = "N/A"
                     label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} • {language} {status_icon}"
                     job_options.append((label, job_id))
-                
+
                 return gr.update(choices=job_options, value=None)
-                
+
             except Exception as e:
                 gr.Error(f"Failed to refresh job history: {str(e)}")
                 return gr.update()
-        
+
         # Connect history tab events
         job_selector.change(
             handle_job_selection,
             inputs=[job_selector],
             outputs=[job_details_display, history_download_btn, selected_job_id]
         )
-        
+
         history_download_btn.click(
             handle_history_download,
             inputs=[selected_job_id],
             outputs=[history_download_btn]
         )
-        
+
         load_btn.click(
             handle_load_transcript,
             inputs=[selected_job_id],
             outputs=[results_display, download_btn]
         )
-        
+
         refresh_btn.click(
             refresh_job_history,
             outputs=[job_selector]
         )
-        
+
         # Process button click handler
         process_btn.click(
             process_audio_wrapper,
@@ -1076,57 +1070,57 @@ def create_app(env: str = "prod"):
                 download_btn
             ]
         )
-        
+
         # Translation target visibility toggle
         translation_enabled.change(
             toggle_translation_target,
             inputs=[translation_enabled],
             outputs=[translation_target]
         )
-        
+
         # Settings button removed - using accordion instead
-        
+
         save_settings_btn.click(
             save_settings,
             inputs=[api_key_input, settings_audio_model, settings_language_model, system_message_input, browser_state],
             outputs=[browser_state]
         )
-        
+
         reset_settings_btn.click(
             reset_settings,
             outputs=[api_key_input, settings_audio_model, settings_language_model, system_message_input]
         )
-        
+
         # History functions are now handled in the history tab event handlers above
-        
+
         # Chat functions with handler
         def handle_chat_wrapper(message, history, browser_state_value):
             settings = ensure_settings_structure(browser_state_value)
-            
+
             # Set context for chat handler
             context_text = app_state.current_transcript or ""
             chat_handler.set_context(context_text)
-            
+
             return chat_handler.handle_message(message, history, settings)
-        
+
         chat_send_btn.click(
             handle_chat_wrapper,
             inputs=[chat_input, chat_interface, browser_state],
             outputs=[chat_interface, chat_input]
         )
-        
+
         chat_input.submit(
             handle_chat_wrapper,
             inputs=[chat_input, chat_interface, browser_state],
             outputs=[chat_interface, chat_input]
         )
-        
+
         chat_clear_btn.click(
             lambda: chat_handler.clear_history(),
             outputs=[chat_interface]
         )
-        
-        
+
+
         # Page load initialization - load settings from browser state
         def initialize_components(browser_state_value):
             settings = ensure_settings_structure(browser_state_value)
@@ -1142,7 +1136,7 @@ def create_app(env: str = "prod"):
                 settings.get("language_model", config["language_models"][0] if config["language_models"] else "gpt-4o-mini"),
                 settings.get("system_message", config.get("system_message", ""))
             )
-        
+
         app.load(
             initialize_components,
             inputs=[browser_state],
@@ -1152,17 +1146,17 @@ def create_app(env: str = "prod"):
                 api_key_input, settings_audio_model, settings_language_model, system_message_input
             ]
         )
-    
+
     return app
 
 if __name__ == "__main__":
     # Get environment from environment variable or default to prod
     env = os.getenv("APP_ENV", "prod")
-    
+
     print(f"Starting transcriber web app in {env} mode...")
     if env == "mock-ui":
         print("Using mock handlers for UI testing")
-    
+
     demo = create_app(env=env)
     demo.launch(
         server_name="0.0.0.0",

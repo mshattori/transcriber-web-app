@@ -4,18 +4,18 @@ Chat handler - manages chat interactions with transcript context.
 Separates chat business logic from UI event handlers.
 """
 
-from typing import List, Dict, Any, Tuple
+from typing import Any
 
-from llm import chat_with_context, chat_completion
+from ..llm import chat_completion, chat_with_context
 
 
 class ChatHandler:
     """Real chat handler."""
-    
+
     def __init__(self):
-        self.chat_history: List[Dict[str, str]] = []
+        self.chat_history: list[dict[str, str]] = []
         self.current_context: str = ""
-    
+
     def set_context(self, context_text: str):
         """
         Set the context text for chat interactions.
@@ -24,13 +24,13 @@ class ChatHandler:
             context_text: Transcript text to use as context
         """
         self.current_context = context_text
-    
+
     def handle_message(
         self,
         message: str,
-        history: List[Dict[str, str]], 
-        settings: Dict[str, Any]
-    ) -> Tuple[List[Dict[str, str]], str]:
+        history: list[dict[str, str]],
+        settings: dict[str, Any]
+    ) -> tuple[list[dict[str, str]], str]:
         """
         Handle chat message with context injection.
         
@@ -44,13 +44,13 @@ class ChatHandler:
         """
         if not message.strip():
             return history, ""
-        
+
         if not settings.get("api_key"):
             raise ValueError("Please set your OpenAI API key in settings")
-        
+
         # Use transcript as context if available
         context_text = self.current_context
-        
+
         if context_text:
             response = chat_with_context(
                 api_key=settings["api_key"],
@@ -68,15 +68,15 @@ class ChatHandler:
                 system_message=settings.get("system_message", ""),
                 temperature=0.7
             )
-        
+
         # Update history in Gradio messages format
         new_history = history.copy() if history else []
         new_history.append({"role": "user", "content": message})
         new_history.append({"role": "assistant", "content": response})
-        
+
         return new_history, ""
-    
-    def clear_history(self) -> List[Dict[str, str]]:
+
+    def clear_history(self) -> list[dict[str, str]]:
         """
         Clear chat history.
         
@@ -89,25 +89,25 @@ class ChatHandler:
 
 class MockChatHandler:
     """Mock chat handler for UI testing."""
-    
+
     def __init__(self):
-        self.chat_history: List[Dict[str, str]] = []
+        self.chat_history: list[dict[str, str]] = []
         self.current_context: str = "Mock transcript context"
-    
+
     def set_context(self, context_text: str):
         """Mock context setting."""
         self.current_context = context_text
-    
+
     def handle_message(
         self,
         message: str,
-        history: List[List[str]],
-        settings: Dict[str, Any]
-    ) -> Tuple[List[List[str]], str]:
+        history: list[list[str]],
+        settings: dict[str, Any]
+    ) -> tuple[list[list[str]], str]:
         """Mock message handling - returns instant responses."""
         if not message.strip():
             return history, ""
-        
+
         # Generate mock response based on message content
         mock_responses = {
             "hello": "Hello! I'm a mock chat assistant. How can I help you with your transcript?",
@@ -115,26 +115,26 @@ class MockChatHandler:
             "translate": "Here's a mock translation: この文書には重要な情報が含まれています...",
             "key points": "Mock key points:\n1. First important point\n2. Second important point\n3. Third important point",
         }
-        
+
         # Find matching response or use default
         response = None
         for key, value in mock_responses.items():
             if key.lower() in message.lower():
                 response = value
                 break
-        
+
         if not response:
             response = f"Mock response to: '{message}'. This is a simulated chat response for UI testing purposes."
-        
+
         # Add context information if available
         if self.current_context and len(self.current_context) > 50:
             response += "\n\n(This response was generated using the transcript as context)"
-        
+
         # Update history
         history.append([message, response])
         return history, ""
-    
-    def clear_history(self) -> List[List[str]]:
+
+    def clear_history(self) -> list[list[str]]:
         """Mock history clearing."""
         self.chat_history = []
         return []

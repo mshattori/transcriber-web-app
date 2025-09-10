@@ -1,17 +1,21 @@
 """
-Business logic handlers for transcriber web app.
+Handler modules for transcriber web app.
 
-Provides clean separation between UI events and business logic.
+Separates UI logic from business logic using the handler pattern.
 """
 
 from .audio_handler import AudioHandler, MockAudioHandler
-from .chat_handler import ChatHandler, MockChatHandler  
+from .chat_handler import ChatHandler, MockChatHandler
 from .history_handler import HistoryHandler, MockHistoryHandler
-from .settings_handler import SettingsHandler, MockSettingsHandler
+from .settings_handler import MockSettingsHandler, SettingsHandler
 
 __all__ = [
-    "AudioHandler", "MockAudioHandler",
-    "ChatHandler", "MockChatHandler", 
-    "HistoryHandler", "MockHistoryHandler",
-    "SettingsHandler", "MockSettingsHandler"
+    "AudioHandler",
+    "MockAudioHandler",
+    "ChatHandler",
+    "MockChatHandler",
+    "HistoryHandler",
+    "MockHistoryHandler",
+    "SettingsHandler",
+    "MockSettingsHandler",
 ]

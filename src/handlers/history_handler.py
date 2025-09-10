@@ -4,20 +4,20 @@ History handler - manages job history and transcript loading.
 Separates history management business logic from UI event handlers.
 """
 
-import os
 import json
-from typing import List, Tuple, Dict, Any, Optional
+import os
+from typing import Any
 
 
 class HistoryHandler:
     """Real history handler."""
-    
+
     def __init__(self):
         # Get the absolute path of the project root directory (one level up from src)
         self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
         self.data_dir = os.path.join(self.project_root, "data")
-    
-    def get_job_history(self) -> List[List[str]]:
+
+    def get_job_history(self) -> list[list[str]]:
         """
         Get list of previous jobs for history view.
         
@@ -25,25 +25,25 @@ class HistoryHandler:
             List of job records [job_id, timestamp, filename, duration, language, status]
         """
         jobs = []
-        
+
         if not os.path.exists(self.data_dir):
             return []
-        
+
         try:
             for date_folder in sorted(os.listdir(self.data_dir), reverse=True):
                 date_path = os.path.join(self.data_dir, date_folder)
                 if not os.path.isdir(date_path):
                     continue
-                    
+
                 for job_folder in os.listdir(date_path):
                     job_path = os.path.join(date_path, job_folder)
                     metadata_path = os.path.join(job_path, "metadata.json")
-                    
+
                     if os.path.exists(metadata_path):
                         try:
-                            with open(metadata_path, 'r', encoding='utf-8') as f:
+                            with open(metadata_path, encoding='utf-8') as f:
                                 metadata = json.load(f)
-                            
+
                             jobs.append([
                                 metadata.get("job_id", job_folder),
                                 metadata.get("timestamp", ""),
@@ -56,10 +56,10 @@ class HistoryHandler:
                             continue
         except OSError:
             pass
-        
+
         return jobs
-    
-    def load_job_transcript(self, job_id: str) -> Tuple[str, str]:
+
+    def load_job_transcript(self, job_id: str) -> tuple[str, str]:
         """
         Load display content and translation for a specific job using new file management.
         
@@ -69,26 +69,26 @@ class HistoryHandler:
         Returns:
             Tuple of (display_content, translation)
         """
-        from file_manager import get_display_content_from_job, load_job_files
-        from errors import handle_file_read_failure
-        
+        from ..errors import handle_file_read_failure
+        from ..file_manager import get_display_content_from_job, load_job_files
+
         if not job_id:
             return "", ""
-        
+
         try:
             # Find job directory using our own data directory
             job_dir = self._find_job_directory(job_id)
             if not job_dir:
                 return "Job not found - files may have been deleted or moved", ""
-            
+
             # Get display content (integrated display if available, otherwise transcript)
             display_content = get_display_content_from_job(job_dir)
-            
+
             # Get individual files for reference
             transcript, translation, _ = load_job_files(job_dir)
-            
+
             return display_content, translation
-            
+
         except Exception as e:
             import logging
             logging.error(f"Error loading job transcript for {job_id}: {e}")
@@ -96,8 +96,8 @@ class HistoryHandler:
                 f"job_{job_id}", e, "Failed to load job content - files may be corrupted or inaccessible"
             )
             return error_content, ""
-    
-    def load_job_content(self, job_id: str) -> Tuple[str, str, Dict[str, Any]]:
+
+    def load_job_content(self, job_id: str) -> tuple[str, str, dict[str, Any]]:
         """
         Load job content and metadata for display purposes.
         
@@ -107,28 +107,32 @@ class HistoryHandler:
         Returns:
             Tuple of (display_content, translation, metadata)
         """
-        from file_manager import get_display_content_from_job, load_job_files, load_job_metadata
-        from errors import handle_file_read_failure
-        
+        from ..errors import handle_file_read_failure
+        from ..file_manager import (
+            get_display_content_from_job,
+            load_job_files,
+            load_job_metadata,
+        )
+
         if not job_id:
             return "", "", {}
-        
+
         try:
             # Find job directory using our own data directory
             job_dir = self._find_job_directory(job_id)
             if not job_dir:
                 error_content, _ = handle_file_read_failure(
-                    f"job_{job_id}", FileNotFoundError("Job directory not found"), 
+                    f"job_{job_id}", FileNotFoundError("Job directory not found"),
                     "Job not found - files may have been deleted or moved"
                 )
                 return error_content, "", {"error": "job_not_found"}
-            
+
             # Get display content (integrated display if available, otherwise transcript)
             display_content = get_display_content_from_job(job_dir)
-            
+
             # Get individual files
             transcript, translation, integrated_display = load_job_files(job_dir)
-            
+
             # Get metadata with error handling
             try:
                 metadata = load_job_metadata(job_dir)
@@ -136,13 +140,13 @@ class HistoryHandler:
                 import logging
                 logging.warning(f"Failed to load metadata for job {job_id}: {e}")
                 metadata = {"error": "metadata_load_failed"}
-            
+
             # Ensure translation availability is correctly detected
             if not metadata.get("translation_available") and translation:
                 metadata["translation_available"] = True
-            
+
             return display_content, translation, metadata
-            
+
         except Exception as e:
             import logging
             logging.error(f"Error loading job content for {job_id}: {e}")
@@ -150,8 +154,8 @@ class HistoryHandler:
                 f"job_{job_id}", e, "Failed to load job content - files may be corrupted or inaccessible"
             )
             return error_content, "", {"error": "content_load_failed"}
-    
-    def get_job_history_with_translation_info(self) -> List[List[str]]:
+
+    def get_job_history_with_translation_info(self) -> list[list[str]]:
         """
         Get job history with translation information for better display.
         
@@ -159,30 +163,30 @@ class HistoryHandler:
             List of job records with translation status
         """
         jobs = []
-        
+
         if not os.path.exists(self.data_dir):
             return []
-        
+
         try:
             for date_folder in sorted(os.listdir(self.data_dir), reverse=True):
                 date_path = os.path.join(self.data_dir, date_folder)
                 if not os.path.isdir(date_path):
                     continue
-                    
+
                 for job_folder in os.listdir(date_path):
                     job_path = os.path.join(date_path, job_folder)
                     metadata_path = os.path.join(job_path, "metadata.json")
-                    
+
                     if os.path.exists(metadata_path):
                         try:
-                            with open(metadata_path, 'r', encoding='utf-8') as f:
+                            with open(metadata_path, encoding='utf-8') as f:
                                 metadata = json.load(f)
-                            
+
                             # Check for translation availability by examining files if metadata is incomplete
                             translation_available = metadata.get("translation_available", False)
                             if not translation_available:
                                 translation_available = self._check_translation_files_exist(job_path)
-                            
+
                             # Determine language display
                             language = metadata.get("settings", {}).get("default_language", "")
                             if metadata.get("translation_enabled", False) and translation_available:
@@ -192,7 +196,7 @@ class HistoryHandler:
                                 else:
                                     target_lang = "ja"  # Default to Japanese
                                 language = f"{language}+{target_lang}"
-                            
+
                             jobs.append([
                                 metadata.get("job_id", job_folder),
                                 metadata.get("timestamp", ""),
@@ -205,9 +209,9 @@ class HistoryHandler:
                             continue
         except OSError:
             pass
-        
+
         return jobs
-    
+
     def _check_translation_files_exist(self, job_dir: str) -> bool:
         """
         Check if translation files exist in the job directory.
@@ -220,15 +224,15 @@ class HistoryHandler:
         """
         try:
             for file in os.listdir(job_dir):
-                if (file.startswith("transcript.") and 
-                    file.endswith(".txt") and 
-                    file != "transcript.txt" and 
+                if (file.startswith("transcript.") and
+                    file.endswith(".txt") and
+                    file != "transcript.txt" and
                     file != "transcript_integrated.txt"):
                     return True
             return False
         except OSError:
             return False
-    
+
     def has_translation_available(self, job_id: str) -> bool:
         """
         Check if a specific job has translation available.
@@ -241,27 +245,27 @@ class HistoryHandler:
         """
         if not job_id:
             return False
-        
+
         try:
             job_dir = self._find_job_directory(job_id)
             if not job_dir:
                 return False
-            
+
             # Check metadata first
             metadata_path = os.path.join(job_dir, "metadata.json")
             if os.path.exists(metadata_path):
-                with open(metadata_path, 'r', encoding='utf-8') as f:
+                with open(metadata_path, encoding='utf-8') as f:
                     metadata = json.load(f)
                     if metadata.get("translation_available"):
                         return True
-            
+
             # Fallback to file system check
             return self._check_translation_files_exist(job_dir)
-            
+
         except Exception:
             return False
-    
-    def get_job_details(self, job_id: str) -> Dict[str, Any]:
+
+    def get_job_details(self, job_id: str) -> dict[str, Any]:
         """
         Get detailed information about a specific job.
         
@@ -273,26 +277,26 @@ class HistoryHandler:
         """
         if not job_id:
             return {}
-        
+
         try:
             job_dir = self._find_job_directory(job_id)
             if not job_dir:
                 return {}
-            
+
             # Load metadata
             metadata_path = os.path.join(job_dir, "metadata.json")
             if os.path.exists(metadata_path):
-                with open(metadata_path, 'r', encoding='utf-8') as f:
+                with open(metadata_path, encoding='utf-8') as f:
                     metadata = json.load(f)
                 return metadata
-            
+
             return {}
-            
+
         except Exception as e:
             print(f"Error loading job details: {e}")
             return {}
-    
-    def _find_job_directory(self, job_id: str) -> Optional[str]:
+
+    def _find_job_directory(self, job_id: str) -> str | None:
         """
         Find job directory by searching through date-based folders in our data directory.
         
@@ -304,27 +308,27 @@ class HistoryHandler:
         """
         if not os.path.exists(self.data_dir):
             return None
-        
+
         # Search through date folders
         for date_folder in os.listdir(self.data_dir):
             potential_path = os.path.join(self.data_dir, date_folder, job_id)
             if os.path.exists(potential_path):
                 return potential_path
-        
+
         return None
 
 
 class MockHistoryHandler:
     """Mock history handler for UI testing."""
-    
+
     def __init__(self):
         self.mock_jobs = [
             ["mock-001", "2024-08-10T10:30:00", "sample_audio.mp3", "120.0s", "auto", "Completed"],
             ["mock-002", "2024-08-10T14:15:00", "meeting_record.wav", "180.5s", "en", "Completed"],
             ["mock-003", "2024-08-09T16:45:00", "interview.m4a", "95.2s", "ja", "Completed"],
         ]
-    
-    def get_job_history(self) -> List[List[str]]:
+
+    def get_job_history(self) -> list[list[str]]:
         """
         Mock job history - returns predefined job list.
         
@@ -332,8 +336,8 @@ class MockHistoryHandler:
             List of mock job records
         """
         return self.mock_jobs.copy()
-    
-    def load_job_transcript(self, job_id: str) -> Tuple[str, str]:
+
+    def load_job_transcript(self, job_id: str) -> tuple[str, str]:
         """
         Mock transcript loading - returns mock integrated display content.
         
@@ -343,11 +347,11 @@ class MockHistoryHandler:
         Returns:
             Tuple of (mock_display_content, mock_translation)
         """
-        from integrated_display import format_integrated_display
-        
+        from ..integrated_display import format_integrated_display
+
         if not job_id:
             return "", ""
-        
+
         # Mock transcript content based on job ID
         mock_data = {
             "mock-001": {
@@ -393,18 +397,18 @@ Each job has its own transcript content
 that can be loaded and displayed independently."""
             }
         }
-        
+
         if job_id in mock_data:
             data = mock_data[job_id]
             transcript = data["transcript"]
             translation = data["translation"]
-            
+
             # Generate integrated display if translation exists
             if translation:
                 display_content = format_integrated_display(transcript, translation)
             else:
                 display_content = transcript
-                
+
             return display_content, translation
         else:
             # Default mock content for unknown job IDs with proper timestamp format
@@ -416,8 +420,8 @@ Mock translation for job {job_id}.
 これはテスト用のデフォルトモック翻訳です。"""
             display_content = format_integrated_display(transcript, translation)
             return display_content, translation
-    
-    def load_job_content(self, job_id: str) -> Tuple[str, str, Dict[str, Any]]:
+
+    def load_job_content(self, job_id: str) -> tuple[str, str, dict[str, Any]]:
         """
         Mock job content loading with metadata.
         
@@ -428,7 +432,7 @@ Mock translation for job {job_id}.
             Tuple of (display_content, translation, metadata)
         """
         display_content, translation = self.load_job_transcript(job_id)
-        
+
         # Mock metadata
         metadata = {
             "translation_enabled": bool(translation),
@@ -438,10 +442,10 @@ Mock translation for job {job_id}.
                 "last_used_mode": "integrated"
             }
         }
-        
+
         return display_content, translation, metadata
-    
-    def get_job_history_with_translation_info(self) -> List[List[str]]:
+
+    def get_job_history_with_translation_info(self) -> list[list[str]]:
         """
         Mock job history with translation information.
         
@@ -453,7 +457,7 @@ Mock translation for job {job_id}.
             ["mock-002", "2024-08-10T14:15:00", "meeting_record.wav", "180.5s", "en", "Completed"],
             ["mock-003", "2024-08-09T16:45:00", "interview.m4a", "95.2s", "ja+en", "Completed"],
         ]
-    
+
     def has_translation_available(self, job_id: str) -> bool:
         """
         Mock translation availability check.
@@ -467,8 +471,8 @@ Mock translation for job {job_id}.
         # Mock jobs with translation
         jobs_with_translation = {"mock-001", "mock-003"}
         return job_id in jobs_with_translation
-    
-    def get_job_details(self, job_id: str) -> Dict[str, Any]:
+
+    def get_job_details(self, job_id: str) -> dict[str, Any]:
         """
         Mock job details - returns mock metadata.
         
@@ -515,7 +519,7 @@ Mock translation for job {job_id}.
                 }
             }
         }
-        
+
         return mock_details.get(job_id, {
             "job_id": job_id,
             "timestamp": "2024-08-10T12:00:00",
@@ -525,7 +529,7 @@ Mock translation for job {job_id}.
             "translation_available": False,
             "settings": {"default_language": "auto"}
         })
-    
+
     def _check_translation_files_exist(self, job_dir: str) -> bool:
         """
         Mock translation file check - not used in mock but needed for interface compatibility.

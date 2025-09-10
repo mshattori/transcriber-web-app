@@ -5,17 +5,15 @@ Separates audio business logic from UI event handlers.
 """
 
 import os
-import json
 import uuid
-from typing import Dict, Any, Tuple, Optional, NamedTuple
-from datetime import datetime
+from typing import Any, NamedTuple
 
-from transcribe import transcribe_chunked
-from llm import translate_transcript_full
-from util import validate_audio_file, estimate_processing_time, create_job_directory
-from errors import ValidationError, get_user_friendly_message, safe_execute
-from file_manager import save_transcription_files, save_job_metadata
-from integrated_display import get_display_content_for_ui
+from ..errors import ValidationError, safe_execute
+from ..file_manager import save_job_metadata, save_transcription_files
+from ..integrated_display import get_display_content_for_ui
+from ..llm import translate_transcript_full
+from ..transcribe import transcribe_chunked
+from ..util import create_job_directory, estimate_processing_time, validate_audio_file
 
 
 class ProcessingResult(NamedTuple):
@@ -23,19 +21,19 @@ class ProcessingResult(NamedTuple):
     transcript: str
     translation: str
     job_id: str
-    settings_used: Dict[str, Any]
+    settings_used: dict[str, Any]
     display_text: str  # 新規追加: UI表示用テキスト
 
 
 class AudioHandler:
     """Real audio processing handler."""
-    
+
     def __init__(self):
-        self.current_job_id: Optional[str] = None
-        self.current_transcript: Optional[str] = None
-        self.current_translation: Optional[str] = None
-    
-    def get_display_content(self) -> Tuple[str, str, bool]:
+        self.current_job_id: str | None = None
+        self.current_transcript: str | None = None
+        self.current_translation: str | None = None
+
+    def get_display_content(self) -> tuple[str, str, bool]:
         """
         表示用コンテンツの取得
         
@@ -47,7 +45,7 @@ class AudioHandler:
             self.current_translation or "",
             bool(self.current_translation)
         )
-    
+
     def get_ui_display_text(self) -> str:
         """
         UI表示用テキストの取得
@@ -59,8 +57,8 @@ class AudioHandler:
             self.current_transcript or "",
             self.current_translation or ""
         )
-    
-    def validate_audio(self, file_path: str) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+
+    def validate_audio(self, file_path: str) -> tuple[bool, str | None, dict[str, Any]]:
         """
         Validate audio file format, size, and properties.
         
@@ -71,8 +69,8 @@ class AudioHandler:
             Tuple of (is_valid, error_message, file_info)
         """
         return validate_audio_file(file_path)
-    
-    def validate_settings(self, settings: Dict[str, Any]) -> Tuple[bool, str]:
+
+    def validate_settings(self, settings: dict[str, Any]) -> tuple[bool, str]:
         """
         Validate user settings.
         
@@ -84,8 +82,8 @@ class AudioHandler:
         """
         from app import validate_settings as _validate_settings
         return _validate_settings(settings)
-    
-    def estimate_processing_time(self, file_size_mb: float, chunk_minutes: int) -> Dict[str, Any]:
+
+    def estimate_processing_time(self, file_size_mb: float, chunk_minutes: int) -> dict[str, Any]:
         """
         Estimate processing time based on file size and chunk duration.
         
@@ -97,11 +95,11 @@ class AudioHandler:
             Dictionary with time estimates
         """
         return estimate_processing_time(file_size_mb, chunk_minutes)
-    
+
     async def process_audio(
-        self, 
+        self,
         audio_file: str,
-        settings: Dict[str, Any],
+        settings: dict[str, Any],
         progress_callback=None
     ) -> ProcessingResult:
         """
@@ -118,34 +116,34 @@ class AudioHandler:
         # Validate inputs
         if not audio_file:
             raise ValidationError("No audio file provided", field="audio_file")
-        
+
         # Validate settings
         is_valid, error_msg = self.validate_settings(settings)
         if not is_valid:
             raise ValidationError(error_msg, field="settings")
-        
+
         # Validate audio file
         is_valid_file, error_msg, file_info = self.validate_audio(audio_file)
         if not is_valid_file:
             raise ValidationError(f"Invalid audio file: {error_msg}", field="audio_file")
-        
+
         # Create job directory
         job_id = str(uuid.uuid4())[:8]
         job_dir = create_job_directory(job_id)
         self.current_job_id = job_id
-        
+
         # Estimate processing time
         time_estimates = self.estimate_processing_time(
-            file_info['size_mb'], 
+            file_info['size_mb'],
             settings['chunk_minutes']
         )
-        
+
         if progress_callback:
             progress_callback(
-                0.1, 
+                0.1,
                 f"Starting transcription ({time_estimates['estimated_chunks']} chunks expected)"
             )
-        
+
         # Step 1-4: Transcription with chunked processing
         transcript_result = await transcribe_chunked(
             audio_path=audio_file,
@@ -158,18 +156,18 @@ class AudioHandler:
             progress_callback=lambda p, m: progress_callback(0.1 + p * 0.6, m) if progress_callback else None,
             job_dir=job_dir
         )
-        
+
         transcript_text = transcript_result.text
         self.current_transcript = transcript_text
-        
+
         translation_text = ""
-        
+
         # Translation if enabled
         translation_error = None
         if settings.get("translation_enabled", False):
             if progress_callback:
                 progress_callback(0.7, "Starting translation...")
-            
+
             try:
                 translation_result = await translate_transcript_full(
                     api_key=settings["api_key"],
@@ -179,10 +177,10 @@ class AudioHandler:
                     temperature=0.3,
                     progress_callback=lambda p, m: progress_callback(0.7 + p * 0.25, m) if progress_callback else None
                 )
-                
+
                 translation_text = translation_result.translated_text
                 self.current_translation = translation_text
-                
+
             except Exception as e:
                 # Handle translation failure gracefully
                 from errors import handle_translation_failure
@@ -190,22 +188,22 @@ class AudioHandler:
                     transcript_text, e
                 )
                 self.current_translation = translation_text
-                
+
                 if progress_callback:
                     progress_callback(0.95, "Translation failed, but transcription completed successfully")
-        
+
         # Save all file formats (transcript, translation, integrated)
         def _save_all_files():
             saved_files = save_transcription_files(
-                job_dir, 
-                transcript_text, 
-                translation_text, 
+                job_dir,
+                transcript_text,
+                translation_text,
                 settings
             )
             return saved_files
-        
+
         saved_files = safe_execute(_save_all_files, error_context="saving transcription files")
-        
+
         # Save job metadata
         def _save_metadata():
             transcript_stats = {
@@ -213,7 +211,7 @@ class AudioHandler:
                 "duration": transcript_result.total_duration,
                 "processing_time": transcript_result.processing_time
             }
-            
+
             return save_job_metadata(
                 job_dir,
                 job_id,
@@ -223,21 +221,21 @@ class AudioHandler:
                 transcript_stats,
                 saved_files
             )
-        
+
         safe_execute(_save_metadata, error_context="saving job metadata")
-        
+
         # Generate display text for UI with error handling
         display_text = transcript_text  # Default fallback
         try:
             import logging
             logging.info(f"Generating UI display text - transcript length: {len(transcript_text)}, translation length: {len(translation_text)}")
-            
+
             display_text = get_display_content_for_ui(transcript_text, translation_text)
-            
+
             logging.info(f"Generated UI display text - length: {len(display_text)}")
             if len(display_text) < 200:  # Log short content for debugging
                 logging.info(f"UI display text content: {repr(display_text[:200])}")
-                
+
         except Exception as e:
             # Handle integrated display generation failure
             from errors import handle_integrated_display_failure
@@ -247,13 +245,13 @@ class AudioHandler:
             # Log the error but don't fail the entire process
             import logging
             logging.error(f"Integrated display generation failed: {str(e)}", exc_info=True)
-        
+
         if progress_callback:
             if translation_error:
                 progress_callback(1.0, "Transcription completed! Translation failed - see results for details.")
             else:
                 progress_callback(1.0, "Processing completed!")
-        
+
         return ProcessingResult(
             transcript=transcript_text,
             translation=translation_text,
@@ -265,13 +263,13 @@ class AudioHandler:
 
 class MockAudioHandler:
     """Mock audio processing handler for UI testing."""
-    
+
     def __init__(self):
-        self.current_job_id: Optional[str] = "mock-job-123"
-        self.current_transcript: Optional[str] = "# 00:00:00 --> 00:02:30\nMock transcript content"
-        self.current_translation: Optional[str] = "# 00:00:00 --> 00:02:30\nMock translation content"
-    
-    def get_display_content(self) -> Tuple[str, str, bool]:
+        self.current_job_id: str | None = "mock-job-123"
+        self.current_transcript: str | None = "# 00:00:00 --> 00:02:30\nMock transcript content"
+        self.current_translation: str | None = "# 00:00:00 --> 00:02:30\nMock translation content"
+
+    def get_display_content(self) -> tuple[str, str, bool]:
         """
         表示用コンテンツの取得（モック）
         
@@ -283,7 +281,7 @@ class MockAudioHandler:
             self.current_translation or "",
             bool(self.current_translation)
         )
-    
+
     def get_ui_display_text(self) -> str:
         """
         UI表示用テキストの取得（モック）
@@ -295,8 +293,8 @@ class MockAudioHandler:
             self.current_transcript or "",
             self.current_translation or ""
         )
-    
-    def validate_audio(self, file_path: str) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+
+    def validate_audio(self, file_path: str) -> tuple[bool, str | None, dict[str, Any]]:
         """Mock audio validation - always returns valid."""
         return True, None, {
             'size_mb': 2.5,
@@ -305,12 +303,12 @@ class MockAudioHandler:
             'sample_rate': 44100,
             'needs_warning': False
         }
-    
-    def validate_settings(self, settings: Dict[str, Any]) -> Tuple[bool, str]:
+
+    def validate_settings(self, settings: dict[str, Any]) -> tuple[bool, str]:
         """Mock settings validation - always returns valid."""
         return True, ""
-    
-    def estimate_processing_time(self, file_size_mb: float, chunk_minutes: int) -> Dict[str, Any]:
+
+    def estimate_processing_time(self, file_size_mb: float, chunk_minutes: int) -> dict[str, Any]:
         """Mock processing time estimation."""
         return {
             'estimated_chunks': 2,
@@ -319,37 +317,37 @@ class MockAudioHandler:
             'total_time_seconds': 6.0,
             'total_time_minutes': 0.1
         }
-    
+
     async def process_audio(
-        self, 
+        self,
         audio_file: str,
-        settings: Dict[str, Any],
+        settings: dict[str, Any],
         progress_callback=None
     ) -> ProcessingResult:
         """Mock audio processing - returns instant results and creates mock files."""
         import asyncio
         import uuid
-        from datetime import datetime
-        from file_manager import save_transcription_files, save_job_metadata
+
+        from file_manager import save_job_metadata, save_transcription_files
         from util import create_job_directory
-        
+
         # Generate unique job ID
         job_id = f"mock-{uuid.uuid4().hex[:8]}"
-        
+
         # Simulate progress updates
         if progress_callback:
             progress_callback(0.1, "Starting mock transcription...")
             await asyncio.sleep(0.1)
-            
+
             progress_callback(0.5, "Processing mock chunks...")
             await asyncio.sleep(0.1)
-            
+
             if settings.get("translation_enabled", False):
                 progress_callback(0.7, "Starting mock translation...")
                 await asyncio.sleep(0.1)
-            
+
             progress_callback(1.0, "Mock processing completed!")
-        
+
         # Generate mock content
         mock_transcript = f"""# 00:00:00 --> 00:02:30
 This is a mock transcript generated for UI testing purposes.
@@ -359,7 +357,7 @@ The original audio file was: {os.path.basename(audio_file)}
 This mock includes timestamp formatting and multiple segments
 to simulate real transcription output for testing purposes.
 """
-        
+
         mock_translation = ""
         if settings.get("translation_enabled", False):
             mock_translation = f"""# 00:00:00 --> 00:02:30
@@ -370,10 +368,10 @@ to simulate real transcription output for testing purposes.
 このモックには、テスト用の実際の翻訳出力をシミュレートするために
 タイムスタンプフォーマットと複数のセグメントが含まれています。
 """
-        
+
         # Create job directory and save files
         job_dir = create_job_directory(job_id)
-        
+
         # Save transcription files (3 formats)
         saved_files = save_transcription_files(
             job_dir,
@@ -381,7 +379,7 @@ to simulate real transcription output for testing purposes.
             mock_translation,
             settings
         )
-        
+
         # Save metadata
         file_info = {
             'size_mb': 2.5,
@@ -389,13 +387,13 @@ to simulate real transcription output for testing purposes.
             'format': 'mp3',
             'sample_rate': 44100
         }
-        
+
         transcript_stats = {
             'total_chunks': 2,
             'total_duration': 150.0,
             'processing_time': 1.0
         }
-        
+
         save_job_metadata(
             job_dir,
             job_id,
@@ -405,13 +403,13 @@ to simulate real transcription output for testing purposes.
             transcript_stats,
             saved_files
         )
-        
+
         # Generate display text for UI
         display_text = get_display_content_for_ui(mock_transcript, mock_translation)
-        
+
         # Update current job ID for download functionality
         self.current_job_id = job_id
-        
+
         return ProcessingResult(
             transcript=mock_transcript,
             translation=mock_translation,

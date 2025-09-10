@@ -5,18 +5,18 @@ Supports large file transcription with OpenAI Whisper API, including
 real-time progress updates and retry logic with exponential backoff.
 """
 
-import asyncio
 import argparse
+import asyncio
 import os
 import tempfile
 import time
-from typing import List, Dict, Optional, Callable
+from collections.abc import Callable
 from pathlib import Path
 
 import openai
 from pydantic import BaseModel
 
-from util import split_audio, format_duration
+from .util import format_duration, split_audio
 
 
 class TranscriptionChunk(BaseModel):
@@ -25,17 +25,17 @@ class TranscriptionChunk(BaseModel):
     start_time: float
     end_time: float
     text: str
-    confidence: Optional[float] = None
-    
-    
+    confidence: float | None = None
+
+
 class TranscriptionResult(BaseModel):
     """Data model for complete transcription result."""
     text: str
-    chunks: List[TranscriptionChunk]
+    chunks: list[TranscriptionChunk]
     total_duration: float
     word_count: int
     processing_time: float
-    
+
 
 def transcribe(
     audio_path: str,
@@ -78,7 +78,7 @@ async def transcribe_single_chunk(
     language: str,
     temperature: float = 0.0,
     include_timestamps: bool = True
-) -> Dict:
+) -> dict:
     """
     Transcribe a single audio chunk with retry logic.
     
@@ -94,20 +94,24 @@ async def transcribe_single_chunk(
         Dictionary with transcription result and metadata
     """
     from errors import (
-        validate_api_key, validate_file_path, handle_openai_error,
-        APIError, NetworkError, safe_execute
+        APIError,
+        NetworkError,
+        handle_openai_error,
+        safe_execute,
+        validate_api_key,
+        validate_file_path,
     )
-    
+
     # Validate inputs
     validate_api_key(api_key)
     validate_file_path(chunk_path, must_exist=True)
-    
+
     openai.api_key = api_key
-    
+
     # Retry logic with exponential backoff
     max_retries = 3
     last_error = None
-    
+
     for attempt in range(max_retries):
         try:
             def _transcribe_chunk():
@@ -116,9 +120,9 @@ async def transcribe_single_chunk(
                     with tempfile.SpooledTemporaryFile() as temp_file:
                         temp_file.write(f.read())
                         temp_file.seek(0)
-                        
+
                         response_format = "verbose_json" if include_timestamps else "text"
-                        
+
                         resp = openai.audio.transcriptions.create(
                             model=model,
                             file=(Path(chunk_path).name, temp_file),
@@ -126,7 +130,7 @@ async def transcribe_single_chunk(
                             temperature=temperature,
                             response_format=response_format
                         )
-                        
+
                         if include_timestamps and hasattr(resp, 'segments'):
                             return {
                                 'text': resp.text,
@@ -141,39 +145,39 @@ async def transcribe_single_chunk(
                                 'duration': 0,
                                 'language': language
                             }
-            
+
             return safe_execute(_transcribe_chunk, error_context=f"transcribing chunk {chunk_path}")
-            
+
         except (APIError, NetworkError) as e:
             last_error = e
-            
+
             # Don't retry on authentication or quota errors
             if hasattr(e, 'status_code') and e.status_code in [401, 402, 403]:
                 raise e
-            
+
             if attempt == max_retries - 1:
                 raise e
-            
+
             # Exponential backoff: wait 2^attempt seconds
             wait_time = 2 ** attempt
             await asyncio.sleep(wait_time)
-            
+
         except Exception as e:
             # Convert to appropriate error type
             api_error = handle_openai_error(e)
             last_error = api_error
-            
+
             # Don't retry on authentication or quota errors
             if hasattr(api_error, 'status_code') and api_error.status_code in [401, 402, 403]:
                 raise api_error
-            
+
             if attempt == max_retries - 1:
                 raise api_error
-            
+
             # Exponential backoff: wait 2^attempt seconds
             wait_time = 2 ** attempt
             await asyncio.sleep(wait_time)
-    
+
     # Should not reach here, but just in case
     raise last_error or APIError("Max retries exceeded", api_name="OpenAI")
 
@@ -186,8 +190,8 @@ async def transcribe_chunked(
     chunk_minutes: int = 5,
     temperature: float = 0.0,
     include_timestamps: bool = True,
-    progress_callback: Optional[Callable] = None,
-    job_dir: Optional[str] = None
+    progress_callback: Callable | None = None,
+    job_dir: str | None = None
 ) -> TranscriptionResult:
     """
     Transcribe large audio file using chunked processing with progress reporting.
@@ -213,29 +217,29 @@ async def transcribe_chunked(
         TranscriptionResult with complete transcription
     """
     start_time = time.time()
-    
+
     # Step 1: Split audio into chunks
     if progress_callback:
         progress_callback(0.1, "Splitting audio into chunks...")
-    
+
     chunks, temp_dir = split_audio(audio_path, chunk_minutes, overlap_seconds=2)
     total_chunks = len(chunks)
-    
+
     # Step 2: Transcribe chunks with progress
     results = []
     chunk_objects = []
-    
+
     for i, chunk_path in enumerate(chunks):
         print(f"[DEBUG] Processing chunk: {chunk_path}")
         if progress_callback:
             progress_percent = 0.1 + (i / total_chunks) * 0.8  # 10% to 90%
             progress_callback(progress_percent, f"Processing chunk {i+1}/{total_chunks}")
-        
+
         try:
             result = await transcribe_single_chunk(
                 chunk_path, api_key, model, language, temperature, include_timestamps
             )
-            
+
             # Create chunk object
             chunk_obj = TranscriptionChunk(
                 chunk_id=f"chunk_{i+1:02d}",
@@ -244,32 +248,32 @@ async def transcribe_chunked(
                 text=result['text'],
                 confidence=None  # OpenAI doesn't provide confidence scores
             )
-            
+
             chunk_objects.append(chunk_obj)
             results.append(result)
-            
+
         except Exception as e:
             # Clean up partial chunks on error
             from util import cleanup_chunks
             cleanup_chunks(chunks, temp_dir)
-            
-            from errors import TranscriberError, APIError
-            
+
+            from errors import APIError, TranscriberError
+
             if isinstance(e, TranscriberError):
                 raise e
             else:
                 raise APIError(f"Failed to transcribe chunk {i+1}: {str(e)}", api_name="OpenAI")
-    
+
     # Step 3: Merge overlapping chunks intelligently
     if progress_callback:
         progress_callback(0.9, "Merging transcription results...")
-    
+
     merged_text = merge_transcription_results(results, include_timestamps, chunk_minutes)
-    
+
     # Calculate statistics
     word_count = len(merged_text.split())
     processing_time = time.time() - start_time
-    
+
     # Copy chunks to job directory if specified
     if job_dir:
         import shutil
@@ -281,14 +285,14 @@ async def transcribe_chunked(
                 print(f"[DEBUG] Saved chunk to job directory: {dest_path}")
             except Exception as e:
                 print(f"Warning: Failed to copy chunk {chunk_path} to job directory: {e}")
-    
+
     # Cleanup temporary files
     from util import cleanup_chunks
     cleanup_chunks(chunks, temp_dir)
-    
+
     if progress_callback:
         progress_callback(1.0, "Transcription completed!")
-    
+
     return TranscriptionResult(
         text=merged_text,
         chunks=chunk_objects,
@@ -299,7 +303,7 @@ async def transcribe_chunked(
 
 
 def merge_transcription_results(
-    results: List[Dict],
+    results: list[dict],
     include_timestamps: bool = True,
     chunk_minutes: int = 5
 ) -> str:
@@ -316,27 +320,27 @@ def merge_transcription_results(
     """
     if not results:
         return ""
-    
+
     merged_segments = []
     current_time = 0
-    
+
     for i, result in enumerate(results):
         text = result.get('text', '').strip()
         if not text:
             continue
-            
+
         if include_timestamps:
             # Format with timestamp as per INITIAL.md: # HH:MM:SS --> HH:MM:SS
             chunk_duration_seconds = chunk_minutes * 60
             start_time = format_duration(current_time)
             end_time = format_duration(current_time + chunk_duration_seconds)
-            
+
             segment = f"# {start_time} --> {end_time}\n{text}"
             merged_segments.append(segment)
             current_time += chunk_duration_seconds  # Move forward by actual chunk duration
         else:
             merged_segments.append(text)
-    
+
     return "\n\n".join(merged_segments)
 
 
@@ -353,15 +357,15 @@ def format_transcript_for_display(transcript: str) -> str:
         HTML-formatted transcript
     """
     import re
-    
+
     # Convert timestamp format # HH:MM:SS --> HH:MM:SS to HTML spans
     timestamp_pattern = r'# (\d{2}:\d{2}:\d{2}) --> (\d{2}:\d{2}:\d{2})'
-    
+
     def replace_timestamp(match):
         start_time = match.group(1)
         end_time = match.group(2)
         return f'<span class="timestamp"># {start_time} --> {end_time}</span>'
-    
+
     formatted = re.sub(timestamp_pattern, replace_timestamp, transcript)
     return formatted
 
@@ -378,9 +382,9 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.0, help="Temperature")
     parser.add_argument("--timestamps", action="store_true", help="Include timestamps")
     parser.add_argument("--output", help="Output file path")
-    
+
     args = parser.parse_args()
-    
+
     try:
         # Run async transcription
         result = asyncio.run(transcribe_chunked(
@@ -393,7 +397,7 @@ def main():
             include_timestamps=args.timestamps,
             progress_callback=lambda p, m: print(f"Progress: {p*100:.1f}% - {m}")
         ))
-        
+
         # Output results
         if args.output:
             with open(args.output, 'w', encoding='utf-8') as f:
@@ -406,11 +410,11 @@ def main():
             print("=" * 50)
             print(f"Word count: {result.word_count}")
             print(f"Processing time: {result.processing_time:.2f} seconds")
-            
+
     except Exception as e:
         print(f"Error: {e}")
         return 1
-    
+
     return 0
 
 
