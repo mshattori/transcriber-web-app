@@ -34,7 +34,7 @@ def save_transcription_files(
     Raises:
         FileError: ファイル保存に失敗した場合
     """
-    from errors import FileError, safe_execute
+    from .errors import FileError, safe_execute
 
     if settings is None:
         settings = {}
@@ -170,7 +170,7 @@ def load_job_files(job_dir: str) -> tuple[str, str, str]:
     Returns:
         (transcript, translation, integrated_display) のタプル
     """
-    from errors import handle_file_read_failure
+    from .errors import handle_file_read_failure
 
     transcript = ""
     translation = ""
@@ -259,7 +259,7 @@ def get_display_content_from_job(job_dir: str) -> str:
     Returns:
         表示用テキスト
     """
-    from errors import handle_file_read_failure
+    from .errors import handle_file_read_failure
 
     # 統合表示ファイルがあれば優先
     integrated_path = os.path.join(job_dir, "transcript_integrated.txt")

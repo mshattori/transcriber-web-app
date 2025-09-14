@@ -21,7 +21,7 @@ def load_config(config_path: str = None) -> dict:
     Returns:
         Configuration dictionary
     """
-    from errors import ConfigurationError, safe_execute
+    from .errors import ConfigurationError, safe_execute
 
     # Auto-detect config path if not provided
     if config_path is None:
@@ -86,7 +86,7 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
         - List of chunk file paths following naming convention: chunk_01.mp3, etc.
         - The path to the temporary directory created.
     """
-    from errors import FileError, MemoryError, ValidationError, safe_execute
+    from .errors import FileError, MemoryError, ValidationError, safe_execute
 
     # Validate inputs
     if chunk_minutes < 1 or chunk_minutes > 10:
@@ -201,7 +201,7 @@ def validate_audio_file(file_path: str) -> tuple[bool, str | None, dict]:
         Tuple of (is_valid, error_message, file_info)
         file_info contains: size_mb, duration_seconds, format, sample_rate
     """
-    from errors import (
+    from .errors import (
         TranscriberError,
         get_user_friendly_message,
         validate_audio_file_extended,

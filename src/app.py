@@ -8,6 +8,7 @@ Supports environment-based configuration for production, testing, and mock UI mo
 import json
 import logging
 import os
+import traceback
 from typing import Any
 
 import gradio as gr
@@ -24,6 +25,16 @@ logging.basicConfig(
 
 # Handler imports for separation of UI and business logic
 from .config import AppConfig
+from .errors import (
+    APIError,
+    FileError,
+    IntegratedDisplayError,
+    TranscriberError,
+    TranslationError,
+    ValidationError,
+    get_user_friendly_message,
+    validate_api_key,
+)
 from .handlers import (
     AudioHandler,
     ChatHandler,
@@ -34,11 +45,13 @@ from .handlers import (
     MockSettingsHandler,
     SettingsHandler,
 )
-from .llm import chat_completion, chat_with_context
+from .llm import chat_completion, chat_with_context, get_language_code
 
 # Legacy imports for backward compatibility (will be removed gradually)
+from .file_manager import create_download_package, get_display_content_from_job, load_job_files
 from .util import (
     load_config,
+    find_job_directory,
 )
 
 # Custom CSS for modern redesigned UI
@@ -243,8 +256,6 @@ def ensure_settings_structure(browser_state_value: dict[str, Any] | None) -> dic
 
 def validate_settings(settings: dict[str, Any]) -> tuple[bool, str]:
     """Validate user settings."""
-    from errors import ValidationError, get_user_friendly_message, validate_api_key
-
     try:
         # Validate API key
         api_key = settings.get("api_key", "").strip()
@@ -292,32 +303,50 @@ async def process_audio_file(
     settings = load_settings_from_browser_state(browser_state_value)
     settings.update(ui_settings)
 
-    from errors import (
-        APIError,
-        FileError,
-        IntegratedDisplayError,
-        TranscriberError,
-        TranslationError,
-        ValidationError,
-        get_user_friendly_message,
-    )
-
     try:
         print(f"[DEBUG] Received audio file: {audio_file}")
 
         # Get the appropriate audio handler based on environment
-        config = AppConfig()
-        if config.env == "mock-ui":
-            audio_handler = MockAudioHandler()
-        else:
-            audio_handler = AudioHandler()
+        try:
+            config = AppConfig()
+            print(f"[DEBUG] Config environment: {config.env}")
+        except Exception as e:
+            logging.error(f"Failed to initialize AppConfig: {str(e)}", exc_info=True)
+            raise gr.Error(get_user_friendly_message(e))
+
+        try:
+            if config.env == "mock-ui":
+                audio_handler = MockAudioHandler()
+                print(f"[DEBUG] Using MockAudioHandler")
+            else:
+                audio_handler = AudioHandler()
+                print(f"[DEBUG] Using AudioHandler")
+        except ImportError as e:
+            logging.error(f"Import error creating audio handler: {str(e)}", exc_info=True)
+            print(f"[DEBUG] Import error details: {str(e)}")
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            raise gr.Error(get_user_friendly_message(e))
+        except Exception as e:
+            logging.error(f"Unexpected error creating audio handler: {str(e)}", exc_info=True)
+            print(f"[DEBUG] Handler creation error: {str(e)}")
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            raise gr.Error(get_user_friendly_message(e))
+
+        print(f"[DEBUG] Audio handler created successfully")
 
         # Process audio using the handler
-        result = await audio_handler.process_audio(
-            audio_file,
-            settings,
-            progress_callback=lambda p, m: progress(p, m) if progress else None
-        )
+        try:
+            result = await audio_handler.process_audio(
+                audio_file,
+                settings,
+                progress_callback=lambda p, m: progress(p, m) if progress else None
+            )
+            print(f"[DEBUG] Audio processing completed successfully")
+        except Exception as e:
+            logging.error(f"Error in audio processing: {str(e)}", exc_info=True)
+            print(f"[DEBUG] Processing error: {str(e)}")
+            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            raise gr.Error(get_user_friendly_message(e))
 
         # Update app state
         app_state.current_job_id = result.job_id
@@ -331,29 +360,32 @@ async def process_audio_file(
         return result.display_text, result.translation, result.job_id, result.settings_used
 
     except ValidationError as e:
+        logging.error(f"Validation error: {str(e)}", exc_info=True)
         raise gr.Error(get_user_friendly_message(e))
     except APIError as e:
+        logging.error(f"API error: {str(e)}", exc_info=True)
         raise gr.Error(get_user_friendly_message(e))
     except FileError as e:
+        logging.error(f"File error: {str(e)}", exc_info=True)
         raise gr.Error(get_user_friendly_message(e))
     except TranslationError as e:
         # For translation errors, show warning but don't fail completely
-        import logging
         logging.warning(f"Translation failed: {str(e)}")
         # Return the result with error message in translation field
         return result.display_text, result.translation, result.job_id, result.settings_used
     except IntegratedDisplayError as e:
         # For display errors, show warning but don't fail completely
-        import logging
         logging.warning(f"Integrated display generation failed: {str(e)}")
         # Return transcript only
         return result.transcript, result.translation, result.job_id, result.settings_used
     except TranscriberError as e:
+        logging.error(f"Transcriber error: {str(e)}", exc_info=True)
         raise gr.Error(get_user_friendly_message(e))
     except Exception as e:
         # Log unexpected errors
-        import logging
         logging.error(f"Unexpected error in process_audio_file: {str(e)}", exc_info=True)
+        print(f"[DEBUG] Unexpected error: {str(e)}")
+        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
         raise gr.Error(f"An unexpected error occurred: {str(e)}")
 
 def format_transcript_for_display(text: str) -> str:
@@ -380,9 +412,6 @@ def format_transcript_for_display(text: str) -> str:
 
 def create_download_files(job_id: str, settings: dict[str, Any]) -> str:
     """Create download files using the new file management system."""
-    from file_manager import create_download_package
-    from util import find_job_directory
-
     if not job_id:
         raise gr.Error("No transcript available for download")
 
@@ -439,9 +468,6 @@ def get_job_history() -> list[list[str]]:
 
 def load_job_transcript(job_id: str) -> tuple[str, str, str]:
     """Load display content, original transcript, and translation for a specific job using new file management."""
-    from file_manager import get_display_content_from_job, load_job_files
-    from util import find_job_directory
-
     if not job_id:
         return "", "", ""
 
@@ -872,7 +898,6 @@ def create_app(env: str = "prod"):
             # Convert language name to language code if not "auto"
             language_code = language_select_val
             if language_select_val != "auto":
-                from llm import get_language_code
                 language_code = get_language_code(language_select_val)
 
             ui_settings = {
@@ -910,8 +935,10 @@ def create_app(env: str = "prod"):
                 )
 
             except Exception as e:
-                from errors import get_user_friendly_message
+                import traceback
+                logging.error(f"Error in process_audio_wrapper: {str(e)}", exc_info=True)
                 error_msg = get_user_friendly_message(e) if hasattr(e, '__class__') else str(e)
+                error_msg += '\n' + traceback.format_exc()
                 return (
                     f"Error: {error_msg}",
                     create_status_html(0, 0, f"Processing failed: {error_msg}"),
@@ -1149,7 +1176,8 @@ def create_app(env: str = "prod"):
 
     return app
 
-if __name__ == "__main__":
+def main():
+    """Main application function."""
     # Get environment from environment variable or default to prod
     env = os.getenv("APP_ENV", "prod")
 

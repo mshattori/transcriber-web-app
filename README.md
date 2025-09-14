@@ -93,13 +93,18 @@ A production-ready web application for transcribing large audio files using Open
 
 ```bash
 # Production mode (default)
-uv run python src/app.py
+uv run python run.py
 
 # Mock UI mode (for UI testing without API calls)
-APP_ENV=mock-ui uv run python src/app.py
+APP_ENV=mock-ui uv run python run.py
 
 # Test mode (real APIs with test configuration)
-APP_ENV=test uv run python src/app.py
+APP_ENV=test uv run python run.py
+
+# Alternative: Module execution
+python -m src.app
+APP_ENV=mock-ui python -m src.app
+APP_ENV=test python -m src.app
 ```
 
 #### Using traditional pip/venv
@@ -347,7 +352,7 @@ uv run pytest tests/test_util.py -v
 uv run pytest tests/ --cov=src --cov-report=html
 
 # Test the redesigned UI specifically
-APP_ENV=mock-ui uv run python src/app.py  # Start with mock data for UI testing
+APP_ENV=mock-ui uv run python run.py  # Start with mock data for UI testing
 ```
 
 #### Using traditional pip/venv
@@ -375,7 +380,8 @@ python -m pytest tests/test_util.py -v
 python -m pytest tests/ --cov=src --cov-report=html
 
 # Test the redesigned UI specifically
-APP_ENV=mock-ui python src/app.py  # Start with mock data for UI testing
+APP_ENV=mock-ui python run.py  # Start with mock data for UI testing
+# Alternative: APP_ENV=mock-ui python -m src.app
 ```
 
 ### Test Structure
@@ -529,7 +535,7 @@ ENV PYTHONPATH=/app
 
 EXPOSE 7860
 
-CMD ["python", "src/app.py"]
+CMD ["python", "run.py"]
 ```
 
 ### Environment Setup Examples
@@ -538,17 +544,21 @@ CMD ["python", "src/app.py"]
 # Production deployment
 echo "OPENAI_API_KEY=your_key_here" > .env
 echo "APP_ENV=prod" >> .env
-python src/app.py
+python run.py
 
 # Development with mocks
 echo "APP_ENV=mock-ui" > .env
-python src/app.py  # No API key required
+python run.py  # No API key required
 
 # Testing setup
 echo "OPENAI_API_KEY=your_key_here" > .env
 echo "APP_ENV=test" >> .env
 echo "TEST_AUDIO_FILE=tests/data/test_audio.mp3" >> .env
-python src/app.py
+python run.py
+
+# Alternative execution methods
+python -m src.app  # Module execution
+APP_ENV=mock-ui python -m src.app  # Module execution with environment
 ```
 
 ## Contributing

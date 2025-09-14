@@ -93,7 +93,7 @@ async def transcribe_single_chunk(
     Returns:
         Dictionary with transcription result and metadata
     """
-    from errors import (
+    from .errors import (
         APIError,
         NetworkError,
         handle_openai_error,
@@ -254,10 +254,10 @@ async def transcribe_chunked(
 
         except Exception as e:
             # Clean up partial chunks on error
-            from util import cleanup_chunks
+            from .util import cleanup_chunks
             cleanup_chunks(chunks, temp_dir)
 
-            from errors import APIError, TranscriberError
+            from .errors import APIError, TranscriberError
 
             if isinstance(e, TranscriberError):
                 raise e
@@ -287,7 +287,7 @@ async def transcribe_chunked(
                 print(f"Warning: Failed to copy chunk {chunk_path} to job directory: {e}")
 
     # Cleanup temporary files
-    from util import cleanup_chunks
+    from .util import cleanup_chunks
     cleanup_chunks(chunks, temp_dir)
 
     if progress_callback:

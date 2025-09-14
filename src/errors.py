@@ -597,16 +597,29 @@ ERROR_MESSAGES = {
 }
 
 
-def get_user_friendly_message(error: TranscriberError) -> str:
+def get_user_friendly_message(error: Exception) -> str:
     """
     Get user-friendly error message for UI display.
     
     Args:
-        error: TranscriberError instance
+        error: Exception instance (TranscriberError or standard Python exception)
         
     Returns:
         User-friendly error message
     """
+    # Handle standard Python exceptions first
+    if not isinstance(error, TranscriberError):
+        if isinstance(error, ModuleNotFoundError):
+            return "Module import error. Please check your installation and try again."
+        elif isinstance(error, ImportError):
+            return "Import error. Please check your installation and try again."
+        elif isinstance(error, FileNotFoundError):
+            return "File not found. Please check the file path and try again."
+        elif isinstance(error, PermissionError):
+            return "Permission denied. Please check file permissions and try again."
+        else:
+            return f"An unexpected error occurred: {str(error)}"
+    
     # Handle translation-specific errors
     if isinstance(error, TranslationError):
         if error.transcript_available:

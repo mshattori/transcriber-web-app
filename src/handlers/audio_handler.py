@@ -80,7 +80,7 @@ class AudioHandler:
         Returns:
             Tuple of (is_valid, error_message)
         """
-        from app import validate_settings as _validate_settings
+        from ..app import validate_settings as _validate_settings
         return _validate_settings(settings)
 
     def estimate_processing_time(self, file_size_mb: float, chunk_minutes: int) -> dict[str, Any]:
@@ -183,7 +183,7 @@ class AudioHandler:
 
             except Exception as e:
                 # Handle translation failure gracefully
-                from errors import handle_translation_failure
+                from ..errors import handle_translation_failure
                 transcript_text, translation_text, translation_error = handle_translation_failure(
                     transcript_text, e
                 )
@@ -238,7 +238,7 @@ class AudioHandler:
 
         except Exception as e:
             # Handle integrated display generation failure
-            from errors import handle_integrated_display_failure
+            from ..errors import handle_integrated_display_failure
             display_text, display_error = handle_integrated_display_failure(
                 transcript_text, translation_text, e
             )
@@ -328,8 +328,8 @@ class MockAudioHandler:
         import asyncio
         import uuid
 
-        from file_manager import save_job_metadata, save_transcription_files
-        from util import create_job_directory
+        from ..file_manager import save_job_metadata, save_transcription_files
+        from ..util import create_job_directory
 
         # Generate unique job ID
         job_id = f"mock-{uuid.uuid4().hex[:8]}"

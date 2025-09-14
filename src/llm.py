@@ -156,7 +156,7 @@ def chat_with_context(
     Returns:
         Assistant's response
     """
-    from errors import (
+    from .errors import (
         ValidationError,
         handle_openai_error,
         safe_execute,
@@ -406,7 +406,7 @@ Output must be valid JSON following the provided schema."""
         progress_callback(0.1, "Starting translation...")
 
     try:
-        from errors import ValidationError, handle_openai_error, validate_api_key
+        from .errors import ValidationError, handle_openai_error, validate_api_key
 
         # Validate inputs
         validate_api_key(api_key)
