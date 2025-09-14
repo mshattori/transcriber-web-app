@@ -978,13 +978,27 @@ def create_app(env: str = "prod"):
                 job_details = history_handler.get_job_details(job_id)
 
                 # Format job details for display
+                # Format timestamp for display
+                timestamp = job_details.get('timestamp', 'N/A')
+                if timestamp and timestamp != 'N/A':
+                    # Format timestamp nicely
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(timestamp.replace('T', ' '))
+                        formatted_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        formatted_timestamp = timestamp
+                else:
+                    formatted_timestamp = 'N/A'
+
                 details_html = f"""
                 <div style="padding: 15px; background: #f8f9fa; border-radius: 8px;">
                     <h4>Job Details</h4>
-                    <p><strong>Job ID:</strong> {job_details.get('job_id', 'N/A')}</p>
+                    <p><strong>Timestamp:</strong> {formatted_timestamp}</p>
                     <p><strong>File:</strong> {job_details.get('original_filename', 'N/A')}</p>
                     <p><strong>Duration:</strong> {job_details.get('file_info', {}).get('duration_seconds', 0):.1f}s</p>
                     <p><strong>Translation:</strong> {'Enabled' if job_details.get('translation_enabled', False) else 'Disabled'}</p>
+                    <p><strong>Job ID:</strong> {job_details.get('job_id', 'N/A')}</p>
                     <p><strong>Status:</strong> Completed</p>
                 </div>
                 """
@@ -1046,7 +1060,7 @@ def create_app(env: str = "prod"):
                     else:
                         date_part = "N/A"
                         time_part = "N/A"
-                    label = f"{job_id} • {filename} • {date_part} {time_part} • {duration} • {language} {status_icon}"
+                    label = f"{date_part} {time_part} • {filename} • {job_id} • {duration} • {language} {status_icon}"
                     job_options.append((label, job_id))
 
                 return gr.update(choices=job_options, value=None)
@@ -1054,6 +1068,43 @@ def create_app(env: str = "prod"):
             except Exception as e:
                 gr.Error(f"Failed to refresh job history: {str(e)}")
                 return gr.update()
+
+        def handle_delete_job(job_id):
+            """Delete selected job and refresh history."""
+            if not job_id:
+                raise gr.Error("No job selected for deletion")
+            
+            try:
+                success, message = history_handler.delete_job(job_id)
+                
+                if success:
+                    gr.Info(message)
+                    # Refresh the job history list after successful deletion
+                    job_history = history_handler.get_job_history_with_translation_info()
+                    job_options = []
+                    for job in job_history:
+                        job_id_item, timestamp, filename, duration, language, status = job
+                        status_icon = "✅" if status == "Completed" else "❌"
+                        if timestamp:
+                            date_part = timestamp.split()[0] if " " in timestamp else timestamp[:10]
+                            time_part = timestamp.split()[1] if " " in timestamp else timestamp[11:19]
+                        else:
+                            date_part = "N/A"
+                            time_part = "N/A"
+                        label = f"{date_part} {time_part} • {filename} • {job_id_item} • {duration} • {language} {status_icon}"
+                        job_options.append((label, job_id_item))
+                    
+                    return (
+                        gr.update(choices=job_options, value=None),  # Reset job selector
+                        "<p style='color: #888; text-align: center;'>Select a job above to view details</p>",  # Reset details display
+                        gr.update(visible=False),  # Hide download button
+                        None  # Reset selected job ID
+                    )
+                else:
+                    raise gr.Error(message)
+                    
+            except Exception as e:
+                raise gr.Error(f"Failed to delete job: {str(e)}")
 
         # Connect history tab events
         job_selector.change(
@@ -1077,6 +1128,12 @@ def create_app(env: str = "prod"):
         refresh_btn.click(
             refresh_job_history,
             outputs=[job_selector]
+        )
+
+        delete_btn.click(
+            handle_delete_job,
+            inputs=[selected_job_id],
+            outputs=[job_selector, job_details_display, history_download_btn, selected_job_id]
         )
 
         # Process button click handler

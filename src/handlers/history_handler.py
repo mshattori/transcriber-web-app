@@ -317,6 +317,54 @@ class HistoryHandler:
 
         return None
 
+    def delete_job(self, job_id: str) -> tuple[bool, str]:
+        """
+        Delete a job and all its associated files.
+        Also cleanup empty parent directories (YYYY-MM-DD format).
+        
+        Args:
+            job_id: Job ID to delete
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        if not job_id:
+            return False, "No job ID provided"
+
+        try:
+            import shutil
+            
+            # Find job directory
+            job_dir = self._find_job_directory(job_id)
+            if not job_dir:
+                return False, f"Job {job_id} not found"
+
+            # Get parent directory path before deletion
+            parent_dir = os.path.dirname(job_dir)
+
+            # Delete the entire job directory
+            shutil.rmtree(job_dir)
+            
+            # Check if parent directory (YYYY-MM-DD) is now empty and clean it up
+            try:
+                if os.path.exists(parent_dir) and os.path.isdir(parent_dir):
+                    # Check if directory is empty
+                    if not os.listdir(parent_dir):
+                        os.rmdir(parent_dir)
+                        import logging
+                        logging.info(f"Cleaned up empty parent directory: {parent_dir}")
+            except Exception as cleanup_error:
+                # Log cleanup error but don't fail the main operation
+                import logging
+                logging.warning(f"Could not cleanup parent directory {parent_dir}: {cleanup_error}")
+            
+            return True, f"Job {job_id} deleted successfully"
+            
+        except Exception as e:
+            import logging
+            logging.error(f"Error deleting job {job_id}: {e}")
+            return False, f"Failed to delete job {job_id}: {str(e)}"
+
 
 class MockHistoryHandler:
     """Mock history handler for UI testing."""
@@ -452,11 +500,24 @@ Mock translation for job {job_id}.
         Returns:
             List of mock job records with translation status
         """
-        return [
-            ["mock-001", "2024-08-10T10:30:00", "sample_audio.mp3", "120.0s", "auto+ja", "Completed"],
-            ["mock-002", "2024-08-10T14:15:00", "meeting_record.wav", "180.5s", "en", "Completed"],
-            ["mock-003", "2024-08-09T16:45:00", "interview.m4a", "95.2s", "ja+en", "Completed"],
-        ]
+        # Convert mock_jobs to include translation info format
+        result = []
+        for job in self.mock_jobs:
+            job_id, timestamp, filename, duration, language, status = job
+            # For mock jobs, add translation info based on job ID
+            if job_id in ["mock-001", "mock-003"]:
+                # These jobs have translation enabled
+                if job_id == "mock-001":
+                    language_with_translation = "auto+ja"
+                else:  # mock-003
+                    language_with_translation = "ja+en"
+            else:
+                # mock-002 has no translation
+                language_with_translation = language
+            
+            result.append([job_id, timestamp, filename, duration, language_with_translation, status])
+        
+        return result
 
     def has_translation_available(self, job_id: str) -> bool:
         """
@@ -541,3 +602,25 @@ Mock translation for job {job_id}.
             Always False for mock
         """
         return False
+
+    def delete_job(self, job_id: str) -> tuple[bool, str]:
+        """
+        Mock job deletion - removes from mock job list.
+        
+        Args:
+            job_id: Job ID to delete
+            
+        Returns:
+            Tuple of (success, message)
+        """
+        if not job_id:
+            return False, "No job ID provided"
+        
+        # Find and remove job from mock list
+        original_count = len(self.mock_jobs)
+        self.mock_jobs = [job for job in self.mock_jobs if job[0] != job_id]
+        
+        if len(self.mock_jobs) < original_count:
+            return True, f"Mock job {job_id} deleted successfully"
+        else:
+            return False, f"Mock job {job_id} not found"
