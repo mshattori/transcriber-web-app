@@ -121,8 +121,7 @@ CUSTOM_CSS = """
     border: 1px solid #e0e0e0;
     border-radius: 8px;
     padding: 20px;
-    min-height: 200px;
-    max-height: 400px;
+    min-height: 300px;
     overflow-y: auto;
 }
 
@@ -547,77 +546,79 @@ def toggle_translation_target(enabled):
 def create_main_tab(config: dict[str, Any], audio_handler, chat_handler, settings_handler, env: str):
     """Create the main tab with audio processing interface."""
     with gr.TabItem("Main", elem_classes=["tab-content"]):
-        # Row 1: Configuration Panel
-        with gr.Group(elem_classes=["config-section"]):
-            gr.Markdown("### Configuration")
-            with gr.Row():
-                audio_model = gr.Dropdown(
-                    choices=config["audio_models"],
-                    value=config["audio_models"][0] if config["audio_models"] else "whisper-1",
-                    label="Audio Model",
-                    scale=1,
-                    interactive=True
-                )
-                language_select = gr.Dropdown(
-                    choices=["auto"] + list(config.get("translation_languages", {}).keys()),
-                    value="auto",
-                    label="Language",
-                    scale=1,
-                    interactive=True
-                )
-                chunk_duration = gr.Dropdown(
-                    choices=CHUNK_DURATIONS,
-                    value="1 min",
-                    label="Chunk Duration",
-                    scale=1,
-                    interactive=True
-                )
-
-            with gr.Row():
-                translation_enabled = gr.Checkbox(
-                    label="Enable Translation",
-                    value=False,
-                    scale=1
-                )
-                translation_target = gr.Dropdown(
-                    choices=list(config.get("translation_languages", {}).keys()),
-                    value="Japanese",
-                    label="Translation Target",
-                    visible=False,
-                    scale=2,
-                    interactive=True
-                )
-
-        # Row 2: File Upload
-        with gr.Group():
-            audio_input = gr.File(
-                label="Upload Audio File",
-                file_types=["audio"],
-                elem_classes=["upload-area"]
-            )
-
-        # Row 3: Processing Control
-        with gr.Row():
-            process_btn = gr.Button(
-                "🎯 Start Processing",
-                variant="primary",
-                size="lg",
-                scale=1
-            )
-
-        # Row 4: Status Indicator (separate from results)
+        # Status Indicator (always visible)
         with gr.Group():
             status_display = gr.HTML(
                 value=create_status_html(0, 0, "Ready to process audio file")
             )
 
-        # Row 5: Results Display
+        # Processing Controls (collapsible, open by default)
+        with gr.Accordion("📝 Processing Controls", open=True):
+            # Configuration Panel
+            with gr.Group(elem_classes=["config-section"]):
+                gr.Markdown("### Configuration")
+                with gr.Row():
+                    audio_model = gr.Dropdown(
+                        choices=config["audio_models"],
+                        value=config["audio_models"][0] if config["audio_models"] else "whisper-1",
+                        label="Audio Model",
+                        scale=1,
+                        interactive=True
+                    )
+                    language_select = gr.Dropdown(
+                        choices=["auto"] + list(config.get("translation_languages", {}).keys()),
+                        value="auto",
+                        label="Language",
+                        scale=1,
+                        interactive=True
+                    )
+                    chunk_duration = gr.Dropdown(
+                        choices=CHUNK_DURATIONS,
+                        value="1 min",
+                        label="Chunk Duration",
+                        scale=1,
+                        interactive=True
+                    )
+
+                with gr.Row():
+                    translation_enabled = gr.Checkbox(
+                        label="Enable Translation",
+                        value=False,
+                        scale=1
+                    )
+                    translation_target = gr.Dropdown(
+                        choices=list(config.get("translation_languages", {}).keys()),
+                        value="Japanese",
+                        label="Translation Target",
+                        visible=False,
+                        scale=2,
+                        interactive=True
+                    )
+
+            # File Upload
+            with gr.Group():
+                audio_input = gr.File(
+                    label="Upload Audio File",
+                    file_types=["audio"],
+                    elem_classes=["upload-area"]
+                )
+
+            # Processing Control
+            with gr.Row():
+                process_btn = gr.Button(
+                    "🎯 Start Processing",
+                    variant="primary",
+                    size="lg",
+                    scale=1
+                )
+
+        # Results Display (expandable)
         with gr.Group(elem_classes=["results-container"]):
             gr.Markdown("### Transcription Results")
             results_display = gr.Textbox(
                 placeholder="Transcription results will appear here as processing completes...",
-                lines=10,
-                max_lines=15,
+                lines=25,
+                max_lines=50,
                 show_copy_button=True,
                 container=False
             )
@@ -629,23 +630,21 @@ def create_main_tab(config: dict[str, Any], audio_handler, chat_handler, setting
                     visible=False
                 )
 
-        # Chat Interface
-        with gr.Group(elem_classes=["chat-container"]):
-            gr.Markdown("### Chat with Transcript")
-            with gr.Accordion("💬 Ask questions about your transcript", open=False):
-                chat_interface = gr.Chatbot(
+        # Chat Interface (collapsible, closed by default)
+        with gr.Accordion("💬 Ask questions about your transcript", open=False):
+            chat_interface = gr.Chatbot(
+                label="",
+                height=250,
+                type="messages"
+            )
+            with gr.Row():
+                chat_input = gr.Textbox(
+                    placeholder="Ask a question about the transcript...",
                     label="",
-                    height=250,
-                    type="messages"
+                    scale=4
                 )
-                with gr.Row():
-                    chat_input = gr.Textbox(
-                        placeholder="Ask a question about the transcript...",
-                        label="",
-                        scale=4
-                    )
-                    chat_send_btn = gr.Button("Send", scale=1)
-                    chat_clear_btn = gr.Button("Clear", scale=1)
+                chat_send_btn = gr.Button("Send", scale=1)
+                chat_clear_btn = gr.Button("Clear", scale=1)
 
         return {
             "audio_input": audio_input,
@@ -798,7 +797,7 @@ def create_app(env: str = "prod"):
         history_handler = HistoryHandler()
         settings_handler = SettingsHandler()
 
-    with gr.Blocks(css=CUSTOM_CSS, title="Audio Transcription App") as app:
+    with gr.Blocks(css=CUSTOM_CSS, title="Audio Transcription App", fill_height=True) as app:
         # Browser state for settings persistence
         browser_state = gr.BrowserState(
             load_default_settings(),
