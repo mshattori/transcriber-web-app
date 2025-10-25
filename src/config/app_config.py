@@ -5,6 +5,7 @@ Handles loading configuration from YAML and overriding with environment variable
 """
 
 import os
+import logging
 from typing import Any
 
 from dotenv import load_dotenv
@@ -37,7 +38,7 @@ class AppConfig:
         try:
             self.config = load_config()
         except Exception as e:
-            print(f"Warning: Could not load config.yaml: {e}")
+            logging.getLogger(__name__).warning(f"Could not load config.yaml: {e}")
             self.config = self._get_default_config()
 
         # Override with environment variables
@@ -108,7 +109,7 @@ class AppConfig:
             try:
                 return int(value)
             except ValueError:
-                print(f"Warning: Invalid integer value for {key}: {value}")
+                logging.getLogger(__name__).warning(f"Invalid integer value for {key}: {value}")
         return default
 
     def get(self, key: str, default: Any = None) -> Any:

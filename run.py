@@ -6,16 +6,7 @@ import sys
 import os
 from pathlib import Path
 
-def setup_logging():
-    """Setup basic logging configuration for error reporting."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    return logging.getLogger(__name__)
+from src.logging_config import init_logging
 
 def check_dependencies():
     """Check if required dependencies are installed."""
@@ -67,7 +58,9 @@ def check_project_structure():
 
 def main():
     """Main entry point with comprehensive error handling."""
-    logger = setup_logging()
+    # Initialize unified logging (console + file, no rotation)
+    init_logging(os.getenv("APP_ENV", "prod"))
+    logger = logging.getLogger(__name__)
     
     try:
         logger.info("Starting transcriber web app...")
