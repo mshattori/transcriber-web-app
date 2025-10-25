@@ -9,6 +9,9 @@ import tempfile
 
 import yaml
 from pydub import AudioSegment
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def load_config(config_path: str = None) -> dict:
@@ -110,7 +113,7 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
     def _split_audio_process():
         # Create a dedicated temporary directory for chunks
         temp_dir = tempfile.mkdtemp()
-        print(f"[DEBUG] Created temporary directory for chunks: {temp_dir}")
+        logger.info(f"Created temporary directory for chunks: {temp_dir}")
 
         # Use tempfile.SpooledTemporaryFile for memory efficiency (INITIAL.md requirement)
         with tempfile.SpooledTemporaryFile():
@@ -158,7 +161,7 @@ def split_audio(file_path: str, chunk_minutes: int, overlap_seconds: int = 2) ->
                 # Follow INITIAL.md naming convention: chunk_01.mp3, chunk_02.mp3, etc.
                 chunk_name = f"chunk_{chunk_num:02d}.mp3"
                 chunk_path = os.path.join(temp_dir, chunk_name)
-                print(f"[DEBUG] Creating chunk: {chunk_path}")
+                logger.info(f"Creating chunk file: {chunk_path}")
 
                 # Export chunk to MP3 format
                 chunk.export(chunk_path, format="mp3")
@@ -260,16 +263,17 @@ def cleanup_chunks(chunk_files: list[str], temp_dir: str | None = None) -> None:
         try:
             if os.path.exists(chunk_file):
                 os.remove(chunk_file)
+                logger.info(f"Deleted chunk file: {chunk_file}")
         except Exception as e:
-            print(f"Warning: Failed to remove chunk file {chunk_file}: {e}")
+            logger.warning(f"Failed to remove chunk file {chunk_file}: {e}")
 
     if temp_dir and os.path.exists(temp_dir):
         try:
             import shutil
             shutil.rmtree(temp_dir)
-            print(f"[DEBUG] Removed temporary directory: {temp_dir}")
+            logger.info(f"Removed temporary directory: {temp_dir}")
         except Exception as e:
-            print(f"Warning: Failed to remove temporary directory {temp_dir}: {e}")
+            logger.warning(f"Failed to remove temporary directory {temp_dir}: {e}")
 
 
 def get_audio_stats(file_path: str) -> dict:
@@ -345,6 +349,7 @@ def create_job_directory(job_id: str) -> str:
     job_dir = os.path.join(project_root, "data", date_str, job_id)
 
     os.makedirs(job_dir, exist_ok=True)
+    logger.info(f"Created/ensured job directory: {job_dir}")
     return job_dir
 
 

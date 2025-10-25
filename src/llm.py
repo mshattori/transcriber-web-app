@@ -18,6 +18,9 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from .util import load_config
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TranslationSegment(BaseModel):
@@ -78,6 +81,14 @@ def chat_completion(
         messages = history + [{"role": "user", "content": message}]
         new_history = history.copy()
 
+    start_t = time.time()
+    logger.info(
+        "LLM chat_completion: model=%s messages=%d temperature=%.2f",
+        model,
+        len(messages),
+        temperature,
+    )
+
     resp = openai.chat.completions.create(
         model=model,
         messages=messages,
@@ -85,6 +96,12 @@ def chat_completion(
     )
 
     assistant_reply = resp.choices[0].message.content.strip()
+
+    logger.info(
+        "LLM chat_completion success: model=%s duration_ms=%d",
+        model,
+        int((time.time() - start_t) * 1000),
+    )
 
     # Add latest user/assistant to history
     new_history.append({"role": "user", "content": message})
@@ -177,6 +194,7 @@ def chat_with_context(
     openai.api_key = api_key
 
     def _chat_with_context():
+        start_t = time.time()
         messages = []
 
         # Step 1: System message
@@ -191,13 +209,26 @@ def chat_with_context(
         # Step 3: Actual question
         messages.append({"role": "user", "content": question})
 
+        logger.info(
+            "LLM chat_with_context: model=%s temp=%.2f ctx_chars=%d q_chars=%d",
+            model,
+            temperature,
+            len(context_text or ""),
+            len(question or ""),
+        )
+
         resp = openai.chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
         )
-
-        return resp.choices[0].message.content.strip()
+        result = resp.choices[0].message.content.strip()
+        logger.info(
+            "LLM chat_with_context success: model=%s duration_ms=%d",
+            model,
+            int((time.time() - start_t) * 1000),
+        )
+        return result
 
     try:
         return safe_execute(_chat_with_context, error_context="chat with context")
@@ -229,6 +260,15 @@ def structured_completion(
     """
     openai.api_key = api_key
 
+    start_t = time.time()
+    logger.info(
+        "LLM structured_completion: model=%s temp=%.2f sys_chars=%d user_chars=%d",
+        model,
+        temperature,
+        len(system_prompt or ""),
+        len(user_prompt or ""),
+    )
+
     # Base parameters
     params: dict[str, Any] = {
         "model": model,
@@ -255,11 +295,16 @@ def structured_completion(
     resp = openai.chat.completions.create(**params)
 
     # Debug logging
-    print(f"[DEBUG] Model: {model}")
-    print(f"[DEBUG] Usage: {resp.usage.prompt_tokens} prompt + {resp.usage.completion_tokens} completion tokens")
-    print(f"[DEBUG] Finish reason: {resp.choices[0].finish_reason}")
+    logger.debug(f"Model: {model}")
+    logger.debug(f"Usage: {resp.usage.prompt_tokens} prompt + {resp.usage.completion_tokens} completion tokens")
+    logger.debug(f"Finish reason: {resp.choices[0].finish_reason}")
 
     content = resp.choices[0].message.content
+    logger.info(
+        "LLM structured_completion success: model=%s duration_ms=%d",
+        model,
+        int((time.time() - start_t) * 1000),
+    )
     return json.loads(content) if isinstance(content, str) else content
 
 

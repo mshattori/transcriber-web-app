@@ -17,6 +17,9 @@ import openai
 from pydantic import BaseModel
 
 from .util import format_duration, split_audio
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class TranscriptionChunk(BaseModel):
@@ -123,6 +126,14 @@ async def transcribe_single_chunk(
 
                         response_format = "verbose_json" if include_timestamps else "text"
 
+                        logger.info(
+                            "LLM transcribe_chunk: model=%s fmt=%s file=%s",
+                            model,
+                            response_format,
+                            chunk_path,
+                        )
+
+                        start_t = time.time()
                         resp = openai.audio.transcriptions.create(
                             model=model,
                             file=(Path(chunk_path).name, temp_file),
@@ -132,19 +143,27 @@ async def transcribe_single_chunk(
                         )
 
                         if include_timestamps and hasattr(resp, 'segments'):
-                            return {
+                            result_obj = {
                                 'text': resp.text,
                                 'segments': resp.segments,
                                 'duration': getattr(resp, 'duration', 0),
                                 'language': getattr(resp, 'language', language)
                             }
                         else:
-                            return {
+                            result_obj = {
                                 'text': resp if isinstance(resp, str) else resp.text,
                                 'segments': [],
                                 'duration': 0,
                                 'language': language
                             }
+
+                        logger.info(
+                            "LLM transcribe_chunk success: model=%s duration_ms=%d chars=%d",
+                            model,
+                            int((time.time() - start_t) * 1000),
+                            len(result_obj.get('text', '') or ''),
+                        )
+                        return result_obj
 
             return safe_execute(_transcribe_chunk, error_context=f"transcribing chunk {chunk_path}")
 
@@ -230,7 +249,7 @@ async def transcribe_chunked(
     chunk_objects = []
 
     for i, chunk_path in enumerate(chunks):
-        print(f"[DEBUG] Processing chunk: {chunk_path}")
+        logger.info(f"Processing chunk {i+1}/{total_chunks}: {chunk_path}")
         if progress_callback:
             progress_percent = 0.1 + (i / total_chunks) * 0.8  # 10% to 90%
             progress_callback(progress_percent, f"Processing chunk {i+1}/{total_chunks}")
@@ -282,9 +301,9 @@ async def transcribe_chunked(
                 chunk_filename = os.path.basename(chunk_path)
                 dest_path = os.path.join(job_dir, chunk_filename)
                 shutil.copy2(chunk_path, dest_path)
-                print(f"[DEBUG] Saved chunk to job directory: {dest_path}")
+                logger.info(f"Saved chunk to job directory: {dest_path}")
             except Exception as e:
-                print(f"Warning: Failed to copy chunk {chunk_path} to job directory: {e}")
+                logger.warning(f"Failed to copy chunk {chunk_path} to job directory: {e}")
 
     # Cleanup temporary files
     from .util import cleanup_chunks

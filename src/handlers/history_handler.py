@@ -7,6 +7,9 @@ Separates history management business logic from UI event handlers.
 import json
 import os
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class HistoryHandler:
@@ -293,7 +296,7 @@ class HistoryHandler:
             return {}
 
         except Exception as e:
-            print(f"Error loading job details: {e}")
+            logger.error(f"Error loading job details: {e}")
             return {}
 
     def _find_job_directory(self, job_id: str) -> str | None:
@@ -343,7 +346,9 @@ class HistoryHandler:
             parent_dir = os.path.dirname(job_dir)
 
             # Delete the entire job directory
+            logger.info(f"Deleting job directory: {job_dir}")
             shutil.rmtree(job_dir)
+            logger.info(f"Deleted job {job_id}")
             
             # Check if parent directory (YYYY-MM-DD) is now empty and clean it up
             try:

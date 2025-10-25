@@ -5,6 +5,9 @@ Separates settings business logic from UI event handlers.
 """
 
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ..errors import ValidationError, get_user_friendly_message, validate_api_key
 from ..util import load_config
@@ -82,7 +85,7 @@ class SettingsHandler:
         if isinstance(browser_state_value, dict) and "settings" in browser_state_value:
             return browser_state_value["settings"]
 
-        print("No settings found in browser state, using defaults.")
+        logger.debug("No settings found in browser state, using defaults.")
         return self.load_default_settings()
 
     def validate_settings(self, settings: dict[str, Any]) -> tuple[bool, str]:

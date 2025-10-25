@@ -11,6 +11,9 @@ from datetime import datetime
 from typing import Any
 
 from .integrated_display import format_integrated_display
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def save_transcription_files(
@@ -46,6 +49,7 @@ def save_transcription_files(
         transcript_path = os.path.join(job_dir, "transcript.txt")
         with open(transcript_path, 'w', encoding='utf-8') as f:
             f.write(transcript)
+        logger.info(f"Saved transcript file: {transcript_path} (bytes={len(transcript.encode('utf-8'))})")
         return transcript_path
 
     try:
@@ -65,6 +69,7 @@ def save_transcription_files(
             translation_path = os.path.join(job_dir, f"transcript.{lang_code}.txt")
             with open(translation_path, 'w', encoding='utf-8') as f:
                 f.write(translation)
+            logger.info(f"Saved translation file: {translation_path} (bytes={len(translation.encode('utf-8'))})")
             return translation_path
 
         try:
@@ -156,6 +161,7 @@ def save_job_metadata(
     metadata_path = os.path.join(job_dir, "metadata.json")
     with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, indent=2, ensure_ascii=False)
+    logger.info(f"Saved job metadata: {metadata_path}")
 
     return metadata_path
 
@@ -324,7 +330,9 @@ def create_download_package(job_dir: str, job_id: str) -> str:
 
     if len(available_files) == 1:
         # 単一ファイルの場合は直接提供
-        return available_files[0][1]
+        path = available_files[0][1]
+        logger.info(f"Prepared single-file download: {path}")
+        return path
     else:
         # 複数ファイルの場合はZIP
         return _create_zip_from_files(available_files, job_id)
@@ -349,5 +357,6 @@ def _create_zip_from_files(files: list[tuple[str, str]], job_id: str) -> str:
     with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for filename, filepath in files:
             zipf.write(filepath, filename)
+    logger.info(f"Created download ZIP: {temp_zip_path} ({len(files)} files)")
 
     return temp_zip_path

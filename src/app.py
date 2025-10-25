@@ -17,11 +17,8 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Setup logging for debugging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Module logger (configured by run.py's logging init)
+logger = logging.getLogger(__name__)
 
 # Handler imports for separation of UI and business logic
 from .config import AppConfig
@@ -46,6 +43,7 @@ from .handlers import (
     SettingsHandler,
 )
 from .llm import chat_completion, chat_with_context, get_language_code
+from .logging_config import init_logging
 
 # Legacy imports for backward compatibility (will be removed gradually)
 from .file_manager import create_download_package, get_display_content_from_job, load_job_files
@@ -242,7 +240,7 @@ def load_default_settings() -> dict[str, Any]:
 def ensure_settings_structure(browser_state_value: dict[str, Any] | None) -> dict[str, Any]:
     """Ensure browser state has proper settings structure with defaults."""
     if not isinstance(browser_state_value, dict):
-        print("No settings found in browser state, using defaults.")
+        logger.debug("No settings found in browser state, using defaults.")
         return load_default_settings()
 
     # Fill in any missing keys with defaults
@@ -303,12 +301,12 @@ async def process_audio_file(
     settings.update(ui_settings)
 
     try:
-        print(f"[DEBUG] Received audio file: {audio_file}")
+        logger.debug(f"Received audio file: {audio_file}")
 
         # Get the appropriate audio handler based on environment
         try:
             config = AppConfig()
-            print(f"[DEBUG] Config environment: {config.env}")
+            logger.debug(f"Config environment: {config.env}")
         except Exception as e:
             logging.error(f"Failed to initialize AppConfig: {str(e)}", exc_info=True)
             raise gr.Error(get_user_friendly_message(e))
@@ -316,22 +314,22 @@ async def process_audio_file(
         try:
             if config.env == "mock-ui":
                 audio_handler = MockAudioHandler()
-                print(f"[DEBUG] Using MockAudioHandler")
+                logger.debug("Using MockAudioHandler")
             else:
                 audio_handler = AudioHandler()
-                print(f"[DEBUG] Using AudioHandler")
+                logger.debug("Using AudioHandler")
         except ImportError as e:
             logging.error(f"Import error creating audio handler: {str(e)}", exc_info=True)
-            print(f"[DEBUG] Import error details: {str(e)}")
-            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            logger.debug(f"Import error details: {str(e)}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             raise gr.Error(get_user_friendly_message(e))
         except Exception as e:
             logging.error(f"Unexpected error creating audio handler: {str(e)}", exc_info=True)
-            print(f"[DEBUG] Handler creation error: {str(e)}")
-            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            logger.debug(f"Handler creation error: {str(e)}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             raise gr.Error(get_user_friendly_message(e))
 
-        print(f"[DEBUG] Audio handler created successfully")
+        logger.debug("Audio handler created successfully")
 
         # Process audio using the handler
         try:
@@ -340,11 +338,11 @@ async def process_audio_file(
                 settings,
                 progress_callback=lambda p, m: progress(p, m) if progress else None
             )
-            print(f"[DEBUG] Audio processing completed successfully")
+            logger.debug("Audio processing completed successfully")
         except Exception as e:
             logging.error(f"Error in audio processing: {str(e)}", exc_info=True)
-            print(f"[DEBUG] Processing error: {str(e)}")
-            print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+            logger.debug(f"Processing error: {str(e)}")
+            logger.debug(f"Traceback: {traceback.format_exc()}")
             raise gr.Error(get_user_friendly_message(e))
 
         # Update app state
@@ -383,8 +381,8 @@ async def process_audio_file(
     except Exception as e:
         # Log unexpected errors
         logging.error(f"Unexpected error in process_audio_file: {str(e)}", exc_info=True)
-        print(f"[DEBUG] Unexpected error: {str(e)}")
-        print(f"[DEBUG] Traceback: {traceback.format_exc()}")
+        logger.debug(f"Unexpected error: {str(e)}")
+        logger.debug(f"Traceback: {traceback.format_exc()}")
         raise gr.Error(f"An unexpected error occurred: {str(e)}")
 
 def format_transcript_for_display(text: str) -> str:
@@ -485,7 +483,7 @@ def load_job_transcript(job_id: str) -> tuple[str, str, str]:
         return display_content, transcript, translation
 
     except Exception as e:
-        print(f"Error loading job transcript: {e}")
+        logger.error(f"Error loading job transcript: {e}")
         return "", "", ""
 
 def handle_chat_message(
@@ -1237,9 +1235,12 @@ def main():
     # Get environment from environment variable or default to prod
     env = os.getenv("APP_ENV", "prod")
 
-    print(f"Starting transcriber web app in {env} mode...")
+    # Ensure logging is initialized (idempotent if already configured)
+    init_logging(env)
+
+    logger.info(f"Starting transcriber web app in {env} mode...")
     if env == "mock-ui":
-        print("Using mock handlers for UI testing")
+        logger.info("Using mock handlers for UI testing")
 
     demo = create_app(env=env)
     demo.launch(
