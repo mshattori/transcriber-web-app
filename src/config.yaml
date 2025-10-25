@@ -5,6 +5,7 @@ audio_models:
   - gpt-4o-transcribe
 
 language_models:
+  - gpt-5-mini
   - gpt-4o-mini
   - gpt-4o
   - gpt-4o-speed
@@ -17,6 +18,7 @@ system_message: |
 default_language: "auto"
 default_translation_language: "Japanese"
 default_chunk_minutes: 1
+default_segments_per_chunk: 10
 max_file_size_mb: 500
 supported_formats:
   - .mp3

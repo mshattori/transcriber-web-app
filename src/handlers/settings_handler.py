@@ -27,7 +27,7 @@ class SettingsHandler:
             return {
                 "api_key": "",
                 "audio_model": self.config["audio_models"][0] if self.config["audio_models"] else "whisper-1",
-                "language_model": self.config["language_models"][0] if self.config["language_models"] else "gpt-4o-mini",
+                "language_model": self.config["language_models"][0] if self.config["language_models"] else "gpt-5-mini",
                 "system_message": self.config.get("system_message", ""),
                 "default_language": self.config.get("default_language", "auto"),
                 "default_translation_language": self.config.get("default_translation_language", "Japanese"),
@@ -38,7 +38,7 @@ class SettingsHandler:
             return {
                 "api_key": "",
                 "audio_model": "whisper-1",
-                "language_model": "gpt-4o-mini",
+                "language_model": "gpt-5-mini",
                 "system_message": "あなたはプロフェッショナルで親切な文字起こしアシスタントです。",
                 "default_language": "auto",
                 "default_translation_language": "Japanese",
@@ -149,7 +149,7 @@ class SettingsHandler:
         """
         return {
             "audio_models": self.config.get("audio_models", ["whisper-1"]),
-            "language_models": self.config.get("language_models", ["gpt-4o-mini"]),
+            "language_models": self.config.get("language_models", ["gpt-5-mini"]),
             "translation_languages": list(self.config.get("translation_languages", {}).keys()),
             "languages": ["auto"] + list(self.config.get("translation_languages", {}).keys())
         }
@@ -161,7 +161,7 @@ class MockSettingsHandler:
     def __init__(self):
         self.mock_config = {
             "audio_models": ["whisper-1", "whisper-large"],
-            "language_models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
+            "language_models": ["gpt-5-mini", "gpt-4o-mini", "gpt-4o"],
             "translation_languages": {
                 "Japanese": "ja",
                 "English": "en",

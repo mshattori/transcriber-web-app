@@ -8,11 +8,13 @@ and CLI interface for testing as specified in INITIAL.md.
 import argparse
 import asyncio
 import json
+import os
 import time
 from collections.abc import Callable
 from typing import Any
 
 import openai
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from .util import load_config
@@ -209,11 +211,11 @@ def structured_completion(
     system_prompt: str,
     user_prompt: str,
     json_schema: dict[str, Any],
-    temperature: float = 0.3,
+    temperature: float = 0.3
 ) -> dict[str, Any]:
     """
     Get structured JSON output using OpenAI structured outputs.
-    
+
     Args:
         api_key: OpenAI API key
         model: Model to use
@@ -221,27 +223,41 @@ def structured_completion(
         user_prompt: User prompt
         json_schema: JSON schema for structured output
         temperature: Temperature for response generation
-        
+
     Returns:
         Parsed Python dictionary
     """
     openai.api_key = api_key
 
-    resp = openai.chat.completions.create(
-        model=model,
-        temperature=temperature,
-        response_format={
+    # Base parameters
+    params: dict[str, Any] = {
+        "model": model,
+        "response_format": {
             "type": "json_schema",
             "json_schema": {
                 "name": "structured_response",
                 "schema": json_schema
             }
         },
-        messages=[
+        "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-    )
+    }
+
+    # Model-specific parameter handling
+    is_gpt5 = model.startswith("gpt-5")
+
+    # Temperature: gpt-5-mini only supports temperature=1 (default)
+    if not is_gpt5:
+        params["temperature"] = temperature
+
+    resp = openai.chat.completions.create(**params)
+
+    # Debug logging
+    print(f"[DEBUG] Model: {model}")
+    print(f"[DEBUG] Usage: {resp.usage.prompt_tokens} prompt + {resp.usage.completion_tokens} completion tokens")
+    print(f"[DEBUG] Finish reason: {resp.choices[0].finish_reason}")
 
     content = resp.choices[0].message.content
     return json.loads(content) if isinstance(content, str) else content
@@ -349,36 +365,40 @@ async def translate_transcript_json(
     model: str,
     transcript_json: list[dict[str, str]],
     target_language: str,
-    source_language: str = "auto",
     temperature: float = 0.3,
     progress_callback: Callable | None = None
 ) -> list[dict[str, str]]:
     """
-    Translate transcript using JSON structured approach from INITIAL.md.
-    
+    Translate transcript using JSON structured approach with retry logic.
+
     Uses OpenAI structured outputs to ensure JSON format compliance.
     Only translates the "text" field, keeps "ts" unchanged.
-    
+    Retries up to 3 times if segment count mismatch occurs.
+
     Args:
         api_key: OpenAI API key
         model: Language model to use
         transcript_json: List of segments with "ts" and "text" fields
         target_language: Target language for translation
-        source_language: Source language (default: "auto")
         temperature: Temperature for translation
         progress_callback: Optional callback for progress updates
-        
+
     Returns:
         List of translated segments with same structure
     """
     openai.api_key = api_key
 
-    # Create JSON schema for structured output
+    # System prompt for translation with explicit instructions
+    num_segments = len(transcript_json)
+
+    # Create JSON schema for structured output with strict segment count constraints
     json_schema = {
         "type": "object",
         "properties": {
             "segments": {
                 "type": "array",
+                "minItems": num_segments,
+                "maxItems": num_segments,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -391,11 +411,17 @@ async def translate_transcript_json(
         },
         "required": ["segments"]
     }
+    system_prompt = f"""You are a professional translator. Your task is critical and requires precision.
 
-    # System prompt for translation
-    system_prompt = f"""You are a professional translator. Translate only the "text" field of each segment to {target_language}. 
-Keep the "ts" field exactly unchanged. Maintain natural flow and consistency across segments.
-Output must be valid JSON following the provided schema."""
+REQUIREMENTS:
+1. You MUST translate ALL {num_segments} segments - no exceptions
+2. Each segment has two fields: "ts" (timestamp) and "text"
+3. Translate ONLY the "text" field to {target_language}
+4. Keep the "ts" field EXACTLY unchanged
+5. Maintain natural flow and consistency across all segments
+6. Your output MUST contain exactly {num_segments} segments
+
+Output must be valid JSON following the provided schema with ALL {num_segments} segments included."""
 
     # User prompt with JSON data
     user_prompt = f"""Translate the following transcript segments. Only translate the "text" fields to {target_language}, keep "ts" fields unchanged:
@@ -417,36 +443,60 @@ Output must be valid JSON following the provided schema."""
         if not transcript_json:
             raise ValidationError("No transcript segments to translate", field="transcript_json")
 
-        # Use structured completion for guaranteed JSON output
-        result = structured_completion(
-            api_key=api_key,
-            model=model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            json_schema=json_schema,
-            temperature=temperature
-        )
+        # Retry logic for non-deterministic LLM behavior
+        max_retries = 3
+        last_error = None
 
-        if progress_callback:
-            progress_callback(0.9, "Processing translation result...")
+        for attempt in range(max_retries):
+            if attempt > 0:
+                print(f"[DEBUG] Retry attempt {attempt + 1}/{max_retries}")
 
-        # Parse result and return segments
-        if isinstance(result, str):
-            result = json.loads(result)
+            if progress_callback:
+                progress_callback(0.3 + (attempt * 0.2), f"Translating... (attempt {attempt + 1})")
 
-        translated_segments = result.get("segments", [])
-
-        # Validate result has same number of segments
-        if len(translated_segments) != len(transcript_json):
-            raise ValidationError(
-                f"Translation returned {len(translated_segments)} segments but expected {len(transcript_json)}",
-                field="translation_result"
+            # Use structured completion for guaranteed JSON output
+            result = structured_completion(
+                api_key=api_key,
+                model=model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                json_schema=json_schema,
+                temperature=temperature
             )
 
-        if progress_callback:
-            progress_callback(1.0, "Translation completed!")
+            if progress_callback:
+                progress_callback(0.8, "Processing translation result...")
 
-        return translated_segments
+            # Parse result and return segments
+            if isinstance(result, str):
+                result = json.loads(result)
+
+            translated_segments = result.get("segments", [])
+
+            # Debug logging for segment count
+            print(f"[DEBUG] Input segments: {len(transcript_json)}, Output segments: {len(translated_segments)}")
+
+            # Validate result has same number of segments
+            if len(translated_segments) == len(transcript_json):
+                print(f"[DEBUG] Translation successful on attempt {attempt + 1}")
+                if progress_callback:
+                    progress_callback(1.0, "Translation completed!")
+                return translated_segments
+            else:
+                # Log the mismatch for debugging
+                print(f"[DEBUG] Attempt {attempt + 1} failed: Missing segments")
+                print(f"[DEBUG] Last input segment: {transcript_json[-1]['ts']}")
+                if translated_segments:
+                    print(f"[DEBUG] Last output segment: {translated_segments[-1]['ts']}")
+
+                last_error = ValidationError(
+                    f"Translation returned {len(translated_segments)} segments but expected {len(transcript_json)}",
+                    field="translation_result"
+                )
+
+        # All retries failed, raise the error
+        if last_error:
+            raise last_error
 
     except Exception as e:
         if isinstance(e, ValidationError):
@@ -461,59 +511,36 @@ async def translate_transcript_chunked(
     model: str,
     transcript_json: list[dict[str, str]],
     target_language: str,
-    source_language: str = "auto",
     temperature: float = 0.3,
-    max_tokens_per_chunk: int = 100000,
+    segments_per_chunk: int = 10,
     progress_callback: Callable | None = None
 ) -> list[dict[str, str]]:
     """
-    Translate large transcripts by splitting into chunks to handle token limits.
-    
+    Translate transcripts by splitting into fixed-size chunks by segment count.
+
+    Always splits into chunks to improve success rate and handle large transcripts.
+    Smaller chunks (fewer segments) generally have higher translation success rates.
+
     Args:
         api_key: OpenAI API key
         model: Language model to use
         transcript_json: List of segments to translate
         target_language: Target language
-        source_language: Source language
         temperature: Temperature for translation
-        max_tokens_per_chunk: Maximum tokens per chunk (rough estimate)
+        segments_per_chunk: Number of segments per chunk (default: 10)
         progress_callback: Optional callback for progress updates
-        
+
     Returns:
         List of translated segments
     """
     if len(transcript_json) == 0:
         return []
 
-    # Estimate tokens (rough: 4 chars per token)
-    total_chars = sum(len(json.dumps(segment)) for segment in transcript_json)
-    estimated_tokens = total_chars // 4
-
-    if estimated_tokens <= max_tokens_per_chunk:
-        # Single chunk translation
-        return await translate_transcript_json(
-            api_key, model, transcript_json, target_language,
-            source_language, temperature, progress_callback
-        )
-
-    # Split into chunks
-    chunks = []
-    current_chunk: list[dict[str, str]] = []
-    current_chars = 0
-
-    for segment in transcript_json:
-        segment_chars = len(json.dumps(segment))
-
-        if current_chars + segment_chars > max_tokens_per_chunk * 4 and current_chunk:
-            chunks.append(current_chunk)
-            current_chunk = [segment]
-            current_chars = segment_chars
-        else:
-            current_chunk.append(segment)
-            current_chars += segment_chars
-
-    if current_chunk:
-        chunks.append(current_chunk)
+    # Split into fixed-size chunks by segment count
+    chunks = [
+        transcript_json[i:i + segments_per_chunk]
+        for i in range(0, len(transcript_json), segments_per_chunk)
+    ]
 
     # Translate chunks
     translated_segments = []
@@ -526,7 +553,7 @@ async def translate_transcript_chunked(
 
         chunk_result = await translate_transcript_json(
             api_key, model, chunk, target_language,
-            source_language, temperature, None
+            temperature, None
         )
 
         translated_segments.extend(chunk_result)
@@ -544,16 +571,17 @@ async def translate_transcript_full(
     target_language: str,
     source_language: str = "auto",
     temperature: float = 0.3,
+    segments_per_chunk: int | None = None,
     progress_callback: Callable | None = None
 ) -> TranslationResult:
     """
     Full transcript translation workflow implementing INITIAL.md strategy.
-    
+
     1. Parse transcript to JSON format
-    2. Translate using structured outputs (chunked if needed)
+    2. Translate using chunked approach (always splits by segment count)
     3. Reconstruct to original format
     4. Return complete result
-    
+
     Args:
         api_key: OpenAI API key
         model: Language model to use
@@ -561,12 +589,18 @@ async def translate_transcript_full(
         target_language: Target language for translation
         source_language: Source language (default: "auto")
         temperature: Temperature for translation
+        segments_per_chunk: Number of segments per chunk (default: from config)
         progress_callback: Optional callback for progress updates
-        
+
     Returns:
         TranslationResult with original and translated text
     """
     start_time = time.time()
+
+    # Load default segments_per_chunk from config if not provided
+    if segments_per_chunk is None:
+        config = load_config()
+        segments_per_chunk = config.get("default_segments_per_chunk", 10)
 
     if progress_callback:
         progress_callback(0.1, "Parsing transcript to JSON...")
@@ -586,8 +620,8 @@ async def translate_transcript_full(
         model=model,
         transcript_json=transcript_json,
         target_language=target_language,
-        source_language=source_language,
         temperature=temperature,
+        segments_per_chunk=segments_per_chunk,
         progress_callback=lambda p, m: progress_callback(0.2 + p * 0.7, m) if progress_callback else None
     )
 
@@ -641,13 +675,16 @@ def get_language_code(language_name: str) -> str:
 # CLI Interface Implementation (INITIAL.md requirement)
 def main():
     """Command-line interface for LLM functionality."""
+    # Load environment variables from .env file
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="LLM utilities CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Chat command
     chat_parser = subparsers.add_parser("chat", help="Chat with context injection")
-    chat_parser.add_argument("--api-key", required=True, help="OpenAI API key")
-    chat_parser.add_argument("--model", default="gpt-4o-mini", help="Model to use")
+    chat_parser.add_argument("--api-key", default=os.getenv("OPENAI_API_KEY"), help="OpenAI API key (default: from .env)")
+    chat_parser.add_argument("--model", default="gpt-5-mini", help="Model to use")
     chat_parser.add_argument("--question", required=True, help="Question to ask")
     chat_parser.add_argument("--context", help="Context text file path")
     chat_parser.add_argument("--context-text", help="Context text directly")
@@ -656,13 +693,14 @@ def main():
 
     # Translation command
     translate_parser = subparsers.add_parser("translate", help="Translate transcript")
-    translate_parser.add_argument("--api-key", required=True, help="OpenAI API key")
-    translate_parser.add_argument("--model", default="gpt-4o-mini", help="Model to use")
+    translate_parser.add_argument("--api-key", default=os.getenv("OPENAI_API_KEY"), help="OpenAI API key (default: from .env)")
+    translate_parser.add_argument("--model", default="gpt-5-mini", help="Model to use")
     translate_parser.add_argument("--input", required=True, help="Input transcript file")
     translate_parser.add_argument("--output", help="Output file path")
     translate_parser.add_argument("--target-language", required=True, help="Target language")
     translate_parser.add_argument("--source-language", default="auto", help="Source language")
     translate_parser.add_argument("--temperature", type=float, default=0.3, help="Temperature")
+    translate_parser.add_argument("--segments-per-chunk", type=int, help="Segments per chunk (default: from config)")
 
     # Parse JSON command
     parse_parser = subparsers.add_parser("parse", help="Parse transcript to JSON")
@@ -736,6 +774,7 @@ def main():
                 target_language=args.target_language,
                 source_language=args.source_language,
                 temperature=args.temperature,
+                segments_per_chunk=args.segments_per_chunk,
                 progress_callback=lambda p, m: print(f"Progress: {p*100:.1f}% - {m}")
             ))
 
